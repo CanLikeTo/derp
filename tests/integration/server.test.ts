@@ -186,3 +186,53 @@ test("resync recovers a baseline the client discarded during a preset change", a
   expect(third.inputEpoch).toBeGreaterThan(second.inputEpoch);
   client.socket.close();
 });
+
+test("old protocol/content versions are explicitly rejected", async () => {
+  await delay(50);
+  for (const hello of [
+    { type: "hello", protocol: 1, content: CONTENT_VERSION },
+    { type: "hello", protocol: PROTOCOL_VERSION, content: "playground-1" },
+  ]) {
+    const client = await connect(hello);
+    expect(client.messages[0]?.type).toBe("rejected");
+    client.socket.close();
+  }
+});
+test("global overrun baselines clear both buffered intentions before either send", async () => {
+  await delay(50);
+  const a = await connect(),
+    b = await connect();
+  try {
+    for (const peer of running.room.participants.values())
+      peer.state = {
+        ...peer.state,
+        y: 10,
+        vy: 0,
+        grounded: false,
+        jumpBufferTicksRemaining: 6,
+      };
+    // Five catch-up steps leave one valid buffer tick, then the global rebase must clear it.
+    const end = performance.now() + 140;
+    while (performance.now() < end) {
+      /* deliberate authoritative scheduler overrun */
+    }
+    await delay(60);
+    const baselines = [a, b].map((client) =>
+      client.messages.find(
+        (m) => m.type === "baseline" && m.reason === "server overrun",
+      ),
+    );
+    for (const baseline of baselines) {
+      if (baseline?.type !== "baseline") throw new Error("No overrun baseline");
+      expect(baseline.players).toHaveLength(2);
+      expect(
+        baseline.players.every((p) => p.jumpBufferTicksRemaining === 0),
+      ).toBe(true);
+    }
+    if (baselines[0]?.type === "baseline" && baselines[1]?.type === "baseline")
+      expect(baselines[0].players).toEqual(baselines[1].players);
+  } finally {
+    a.socket.close();
+    b.socket.close();
+  }
+});

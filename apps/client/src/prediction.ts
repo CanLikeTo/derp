@@ -2,6 +2,7 @@ import {
   Simulation,
   NEUTRAL,
   CONTENT_VERSION,
+  TRACE_VERSION,
   type PlayerState,
   type Input,
   type Trace,
@@ -98,7 +99,7 @@ export class Prediction {
   trace(): Trace | undefined {
     if (!this.authoritative) return;
     return {
-      version: 1,
+      version: TRACE_VERSION,
       contentVersion: CONTENT_VERSION,
       initial: { ...this.authoritative },
       inputs: [...this.history.values()].map((entry) => ({
@@ -106,6 +107,13 @@ export class Prediction {
         jumpPressed: entry.input.jumpPressed,
       })),
     };
+  }
+  cancelPending() {
+    this.history.clear();
+    this.offset = { x: 0, y: 0 };
+    this.tick = this.finalizedTick;
+    if (this.authoritative)
+      this.state = { ...this.authoritative, jumpBufferTicksRemaining: 0 };
   }
   clear() {
     this.state = undefined;

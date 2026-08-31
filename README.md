@@ -11,7 +11,7 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-Open **http://127.0.0.1:5173** in two windows. Click **Connect** in each. Click the arena to activate its controls. A/D or Left/Right moves; Space jumps. Holding Space does not auto-jump. A third connected player is rejected. Only the focused arena takes keyboard input; one keyboard cannot control both windows simultaneously.
+Open **http://127.0.0.1:5173** in two windows. Click **Connect** in each. Click the arena to activate its controls. A/D or Left/Right moves; Space jumps. Holding Space does not auto-jump. You have six ticks (~100 ms) to jump after walking off an edge, and a tap shortly before landing is kept even if you release Space. A third connected player is rejected. Only the focused arena takes keyboard input; one keyboard cannot control both windows simultaneously.
 
 `Disconnect` releases a seat. `Reconnect` creates a fresh anonymous identity. `Reset playground` resets both players through the server. Selecting a latency preset requests a new timing baseline. The debug ghost is an older authoritative pose, not an error measurement.
 
@@ -47,17 +47,19 @@ Linux CI may need `bunx playwright install --with-deps chromium firefox webkit`.
 
 ## What is authoritative?
 
-The server owns movement, collisions, player identities, admission, and reset. Clients send one movement/jump intent for a target server tick, never a position or a client-selected delta-time. Simulation runs at 60 Hz and full snapshots at 20 Hz. Missing commands mean neutral input; late jumps do not fire later.
+The server owns movement, collisions, player identities, admission, and reset. Clients send one movement/jump intent for a target server tick, never a position or a client-selected delta-time. Simulation runs at 60 Hz and full snapshots at 20 Hz. Missing commands mean neutral input; late jump commands do not fire later. A timely press can remain buffered for up to six ticks until a landing.
 
 Local prediction uses exactly the same movement code. A snapshot after tick T retires all input through T; the client restores the complete authoritative state and replays subsequent inputs. Remote players use interpolation with 100 ms extra buffering beyond estimated transit. Positions and collisions are X/Y only; rendered depth is cosmetic.
 
-Blur/visibility loss clears input and suspends commands. Focus restoration, long frame gaps, resets, and timing overruns obtain fresh baselines. Connection replacement invalidates delayed callbacks. There is no account continuity or reconnect reservation.
+Blur/visibility loss clears input, pending prediction and buffered jump intent, and suspends commands. Focus restoration, long frame gaps, resets, and timing overruns obtain fresh baselines. Connection replacement invalidates delayed callbacks. There is no account continuity or reconnect reservation.
 
 ## Measurements and limitations
 
-Use **Export diagnostics** to download a bounded local JSON record with timing samples, counters, environment details, and a replayable pending-input trace. Records are not transmitted to analytics. Network presets preserve ordering and apply seeded application-level delay/jitter; they do **not** reproduce TCP packet loss or establish internet fairness.
+Use **Export diagnostics** to download a bounded local JSON record with timing samples, counters, environment details, and a replayable pending-input trace. The record includes the configured jump windows and remaining-tick counters. Trace version 2 / content `playground-2` is required; older traces are intentionally rejected. Records are not transmitted to analytics. Network presets preserve ordering and apply seeded application-level delay/jitter; they do **not** reproduce TCP packet loss or establish internet fairness.
 
-Generated test reports, screenshots, and soak JSON are under `artifacts/`; Playwright failures also keep traces in `test-results/`. The soak checks queue/entity bounds, error counts, correction and traffic budgets, and post-warm-up memory. Its 32 MiB median-growth alarm is an investigation trigger, not a proof that every leak is absent. Inspect the time series as well as the pass/fail result.
+Generated test reports and screenshots are under `artifacts/`; each soak writes `report.json`, screenshots and its log into a unique `artifacts/playground-jump-forgiveness-v1-soak-<seconds>s-<timestamp>/` directory; Playwright failures also keep traces in `test-results/`. The soak checks queue/entity bounds, error counts, correction and traffic budgets, and post-warm-up memory. Its 32 MiB median-growth alarm is an investigation trigger, not a proof that every leak is absent. Inspect the time series as well as the pass/fail result.
+
+The jump-forgiveness build passes automated correctness checks, but its full soak exceeded the correction budget (0.1333-unit p95 versus <0.08). Performance acceptance remains open; see `docs/VALIDATION.md`.
 
 Two headless test browsers verify behavior and resource trends, not representative GPU performance or simultaneous human fun. Playwright WebKit is not real Safari. Read `docs/VALIDATION.md` for what was actually run and what remains unverified.
 
@@ -72,6 +74,6 @@ The Rapier compatibility build embeds WASM and produces a bundle-size advisory (
 
 No auth, lobbies, database, worker IPC, combat, external art/audio, or hosting is included. The Colyseus comparison, full Rapier terrain sweep, and auth/provider/database compatibility investigation remain deferred. This is a scoped foundation plus responsive movement slice, **not completion of all Milestone 0 or Milestone 1 work** in `IDEA.md`.
 
-No Git repository or remote is assumed. A CI workflow is provided, but remote CI is not verified until this code is placed in a repository and the workflow runs.
+A Git repository and remote are configured. The CI workflow is provided; remote CI for this change has not been run or verified.
 
 Further reading: [protocol contract](docs/PROTOCOL.md), [implementation decisions](docs/DECISIONS.md), [validation evidence](docs/VALIDATION.md), and [first human playtest](docs/PLAYTEST.md).

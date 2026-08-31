@@ -186,3 +186,140 @@ test("remote interpolation holds instead of extrapolating; histories bounded", (
   for (let tick = 4; tick < 100; tick++) buffer.push({ ...base, tick });
   expect(buffer.snapshots.length).toBe(40);
 });
+
+test("reconciliation preserves a timely retired buffer but never recreates a missing press", () => {
+  for (const delivered of [true, false]) {
+    const room = new Room(),
+      prediction = new Prediction();
+    const peer = room.join("a")!;
+    room.baseline("a");
+    peer.state = { ...peer.state, x: 8, y: 2, vy: -10 };
+    const baseline: StateMessage = {
+      type: "baseline",
+      tick: 0,
+      serverTime: 0,
+      playerId: "a",
+      inputEpoch: peer.epoch,
+      players: room.snapshot(),
+      stats,
+      reason: "test",
+    };
+    prediction.baseline(baseline, 0);
+    const press = prediction.advance({ moveX: 0, jumpPressed: true });
+    if (delivered) room.input("a", press);
+    room.step();
+    for (let i = 0; i < 5; i++) prediction.advance(NEUTRAL);
+    prediction.state!.x += 1;
+    prediction.state!.jumpBufferTicksRemaining = 6;
+    prediction.state!.coyoteTicksRemaining = 6;
+    prediction.reconcile({
+      ...baseline,
+      type: "snapshot",
+      tick: 1,
+      players: room.snapshot(),
+    });
+    expect(prediction.history.has(1)).toBe(false);
+    expect(prediction.authoritative!.jumpBufferTicksRemaining).toBe(
+      delivered ? 5 : 0,
+    );
+    expect(prediction.state!.vy > 0).toBe(delivered);
+    room.input("a", press); // Retired input must not refresh either branch.
+    for (let i = 0; i < 5; i++) room.step();
+    expect(prediction.state).toEqual(peer.state);
+    prediction.dispose();
+    room.dispose();
+  }
+});
+test("suspension cancels pending replay and visual offset while authoritative state stays immutable", () => {
+  const prediction = new Prediction(),
+    room = new Room();
+  const peer = room.join("a")!;
+  room.baseline("a");
+  peer.state = { ...peer.state, x: 8, y: 2, vy: -10 };
+  const base: StateMessage = {
+    type: "baseline",
+    tick: 0,
+    serverTime: 0,
+    playerId: "a",
+    inputEpoch: peer.epoch,
+    players: room.snapshot(),
+    stats,
+    reason: "test",
+  };
+  prediction.baseline(base, 0);
+  room.input("a", prediction.advance({ moveX: 0, jumpPressed: true }));
+  room.step();
+  prediction.reconcile({
+    ...base,
+    type: "snapshot",
+    tick: 1,
+    players: room.snapshot(),
+  });
+  const saved = { ...prediction.authoritative! };
+  for (let i = 0; i < 6; i++) prediction.advance(NEUTRAL);
+  prediction.offset = { x: 0.1, y: 0.1 };
+  prediction.cancelPending();
+  room.suspend("a");
+  expect(prediction.history.size).toBe(0);
+  expect(prediction.tick).toBe(prediction.finalizedTick);
+  expect(prediction.offset).toEqual({ x: 0, y: 0 });
+  expect(prediction.state!.jumpBufferTicksRemaining).toBe(0);
+  expect(prediction.authoritative).toEqual(saved);
+  for (let i = 0; i < 8; i++) {
+    room.step();
+    prediction.reconcile({
+      ...base,
+      type: "snapshot",
+      tick: room.tick,
+      players: room.snapshot(),
+    });
+    prediction.cancelPending();
+    expect(prediction.tick).toBe(room.tick);
+    expect(prediction.history.size).toBe(0);
+    expect(prediction.state!.vy).toBeLessThanOrEqual(0);
+  }
+  prediction.dispose();
+  room.dispose();
+});
+test("fresh epochs and suspend cancel buffered intent without refilling coyote or stopping a launched jump", () => {
+  const room = new Room(),
+    peer = room.join("a")!;
+  room.baseline("a");
+  const state = {
+    ...peer.state,
+    x: 8,
+    y: 8,
+    vy: -1,
+    coyoteTicksRemaining: 4,
+    jumpBufferTicksRemaining: 5,
+  };
+  for (const action of [() => room.suspend("a"), () => room.baseline("a")]) {
+    peer.state = { ...state };
+    const oldEpoch = peer.epoch;
+    room.input("a", {
+      type: "input",
+      inputEpoch: oldEpoch,
+      tick: room.tick + 1,
+      moveX: 1,
+      jumpPressed: true,
+    });
+    action();
+    expect(peer.inputs.size).toBe(0);
+    expect(peer.state).toEqual({ ...state, jumpBufferTicksRemaining: 0 });
+  }
+  peer.state = {
+    ...state,
+    vy: 11.5,
+    coyoteTicksRemaining: 0,
+    jumpBufferTicksRemaining: 0,
+  };
+  room.suspend("a");
+  room.step();
+  expect(peer.state.vy).toBe(11);
+  expect(peer.state.coyoteTicksRemaining).toBe(0);
+  room.reset();
+  expect(peer.state).toEqual(spawnState("a", 1));
+  room.leave("a");
+  expect(room.join("fresh")!.state).toEqual(spawnState("fresh", 1));
+  room.dispose();
+});

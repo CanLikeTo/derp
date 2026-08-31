@@ -3,6 +3,8 @@ import {
   fixtureTrace,
   replay,
   TICK_MS,
+  MOVEMENT,
+  type Trace,
 } from "@derp/simulation";
 import {
   BUILD_ID,
@@ -192,6 +194,7 @@ function start() {
   }
   function resync(reason: string) {
     controls.clear();
+    prediction.cancelPending();
     if (!prediction.state || socket?.readyState !== WebSocket.OPEN || syncing)
       return;
     syncing = true;
@@ -234,6 +237,7 @@ function start() {
       return;
     }
     if (message.type === "baseline") {
+      controls.clear();
       latest = message;
       playerId = message.playerId;
       firstTick = message.tick;
@@ -268,7 +272,10 @@ function start() {
         active ? "Connected · movement active" : "Connected · controls paused",
       );
       note(`baseline: ${message.reason}`);
-      if (!active) send({ type: "suspend", inputEpoch: prediction.epoch });
+      if (!active) {
+        prediction.cancelPending();
+        send({ type: "suspend", inputEpoch: prediction.epoch });
+      }
     } else if (message.inputEpoch === prediction.epoch) {
       latest = message;
       lastSnapshotAt = performance.now();
@@ -276,6 +283,7 @@ function start() {
       if (!syncing)
         try {
           prediction.reconcile(message);
+          if (!active) prediction.cancelPending();
         } catch {
           resync("prediction history mismatch");
         }
@@ -290,6 +298,7 @@ function start() {
     active = next;
     controls.clear();
     if (!active && prediction.state) {
+      prediction.cancelPending();
       send({ type: "suspend", inputEpoch: prediction.epoch });
       setStatus("Connected · controls paused");
     }
@@ -345,6 +354,8 @@ function start() {
     return {
       build: BUILD_ID,
       content: CONTENT_VERSION,
+      protocol: PROTOCOL_VERSION,
+      movement: MOVEMENT,
       status,
       active,
       playerId,
@@ -485,7 +496,7 @@ function start() {
     Object.assign(window, {
       __derp: {
         diagnostics,
-        fixture: () => replay(fixtureTrace()),
+        fixture: (trace?: Trace) => replay(trace ?? fixtureTrace()),
         trace: () => prediction.trace(),
         perturb: () => {
           if (prediction.state) prediction.state.x += 1;

@@ -7,7 +7,12 @@ const seconds = Number(process.argv[2] ?? 1800);
 if (!Number.isInteger(seconds) || seconds < 10 || seconds > 7200)
   throw new Error("Duration must be 10–7200 seconds (default 1800)");
 const root = resolve(import.meta.dir, "..");
-await mkdir(resolve(root, "artifacts"), { recursive: true });
+const runDirectory = resolve(
+  root,
+  "artifacts",
+  `${BUILD_ID}-soak-${seconds}s-${Date.now()}`,
+);
+await mkdir(runDirectory, { recursive: true });
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function fingerprint() {
   const hasher = new Bun.CryptoHasher("sha256");
@@ -33,7 +38,7 @@ async function fingerprint() {
 const sourceHash = await fingerprint();
 const child = Bun.spawn([process.execPath, "tools/serve.ts", "preview"], {
   cwd: root,
-  stdout: Bun.file(resolve(root, "artifacts/soak-server.log")),
+  stdout: Bun.file(resolve(runDirectory, "server.log")),
   stderr: "inherit",
 });
 let childExit: number | undefined;
@@ -170,7 +175,7 @@ try {
   const final = await Promise.all(pages.map(read));
   for (let i = 0; i < pages.length; i++)
     await pages[i]!.screenshot({
-      path: resolve(root, `artifacts/soak-player-${i + 1}.png`),
+      path: resolve(runDirectory, `player-${i + 1}.png`),
       fullPage: true,
     });
   const warm = rows.filter(
@@ -233,7 +238,7 @@ try {
   await Promise.allSettled(
     pages.map((page, index) =>
       page.screenshot({
-        path: resolve(root, `artifacts/soak-failure-${index + 1}.png`),
+        path: resolve(runDirectory, `failure-${index + 1}.png`),
         fullPage: true,
       }),
     ),
@@ -254,11 +259,15 @@ try {
   process.exitCode = 1;
 } finally {
   await Bun.write(
-    resolve(root, `artifacts/soak-${seconds}s.json`),
+    resolve(runDirectory, "report.json"),
     JSON.stringify(report, null, 2),
   );
   console.log(
-    JSON.stringify({ ...report, rows: undefined, final: undefined }, null, 2),
+    JSON.stringify(
+      { ...report, runDirectory, rows: undefined, final: undefined },
+      null,
+      2,
+    ),
   );
   await Promise.all(browsers.map((browser) => browser.close()));
   child.kill("SIGTERM");

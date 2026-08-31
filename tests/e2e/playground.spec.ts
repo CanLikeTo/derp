@@ -1,5 +1,15 @@
+import { jumpTraces } from "../fixtures/jumps";
+import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { parseTrace, BUILD_ID, PROTOCOL_VERSION } from "@derp/protocol";
 import { test, expect, type Page } from "@playwright/test";
-import { initializePhysics, fixtureTrace, replay } from "@derp/simulation";
+import {
+  initializePhysics,
+  fixtureTrace,
+  replay,
+  type Trace,
+  type PlayerState,
+} from "@derp/simulation";
 type Diagnostic = {
   status: string;
   active: boolean;
@@ -8,8 +18,8 @@ type Diagnostic = {
   pendingInputs: number;
   predictedTick: number;
   finalizedTick: number;
-  predicted?: { x: number; y: number };
-  authoritative?: { x: number; y: number };
+  predicted?: PlayerState;
+  authoritative?: PlayerState;
   players: { id: string }[];
   resyncs: number;
   queues: { incoming: number; outgoing: number };
@@ -20,7 +30,7 @@ declare global {
   interface Window {
     __derp: {
       diagnostics(): Diagnostic;
-      fixture(): ReturnType<typeof replay>;
+      fixture(trace?: Trace): ReturnType<typeof replay>;
       perturb(): void;
       stall(): void;
       trace(): unknown;
@@ -68,7 +78,15 @@ test("Rapier Bun/browser parity and usable fixed-aspect scene", async ({
     expect(
       Math.hypot(actual[i]!.x - expected[i]!.x, actual[i]!.y - expected[i]!.y),
     ).toBeLessThan(0.0001);
+    expect(Math.abs(actual[i]!.vx - expected[i]!.vx)).toBeLessThan(0.0001);
+    expect(Math.abs(actual[i]!.vy - expected[i]!.vy)).toBeLessThan(0.0001);
     expect(actual[i]!.grounded).toBe(expected[i]!.grounded);
+    expect(actual[i]!.coyoteTicksRemaining).toBe(
+      expected[i]!.coyoteTicksRemaining,
+    );
+    expect(actual[i]!.jumpBufferTicksRemaining).toBe(
+      expected[i]!.jumpBufferTicksRemaining,
+    );
   }
   await join(page);
   await page.getByLabel("Show collision / server ghost").check();
@@ -137,21 +155,28 @@ test("two identities, movement, third rejection, reset and released seat", async
 });
 test("prediction precedes acknowledgement; latency, correction, blur and stall recover", async ({
   page,
+  context,
 }) => {
   await join(page);
+  const observer = await context.newPage();
+  await join(observer);
   for (const preset of ["routine", "degraded", "local"]) {
     await page.locator("#latency").selectOption(preset);
     await focus(page);
     const before = await diagnostics(page);
+    expect(before.players).toHaveLength(2);
     await page.keyboard.down("KeyD");
-    await page.waitForFunction(
-      (x) => window.__derp.diagnostics().predicted!.x > x + 0.05,
-      before.predicted!.x,
-    );
-    const after = await diagnostics(page);
-    expect(after.finalizedTick).toBeLessThan(after.predictedTick);
-    if (preset !== "local")
+    // Capture the first observed movement atomically; a second automation round trip
+    // can observe a later acknowledgement or resync instead of that movement.
+    const observation = await page.waitForFunction((x) => {
+      const data = window.__derp.diagnostics();
+      return data.predicted && data.predicted.x > x + 0.05 ? data : false;
+    }, before.predicted!.x);
+    const after = (await observation.jsonValue()) as Diagnostic;
+    if (preset !== "local") {
+      expect(after.finalizedTick).toBeLessThan(after.predictedTick);
       expect(after.authoritative!.x).toBeCloseTo(before.authoritative!.x, 4);
+    }
     await page.keyboard.up("KeyD");
     await page.evaluate(() => window.__derp.perturb());
     await expect
@@ -168,7 +193,11 @@ test("prediction precedes acknowledgement; latency, correction, blur and stall r
   await page.locator("#debug").focus();
   await expect(page.locator("#status")).toContainText("paused");
   await page.waitForTimeout(350);
-  const pausedX = (await diagnostics(page)).authoritative!.x;
+  const paused = await diagnostics(page);
+  expect(paused.pendingInputs).toBe(0);
+  expect(paused.predictedTick).toBe(paused.finalizedTick);
+  expect(paused.predicted!.jumpBufferTicksRemaining).toBe(0);
+  const pausedX = paused.authoritative!.x;
   await page.waitForTimeout(300);
   expect((await diagnostics(page)).authoritative!.x).toBeCloseTo(pausedX, 4);
   await page.keyboard.up("KeyD");
@@ -190,6 +219,9 @@ test("prediction precedes acknowledgement; latency, correction, blur and stall r
   await expect(page.locator("#status")).toContainText("paused");
   await page.waitForTimeout(350);
   const hidden = await diagnostics(page);
+  expect(hidden.pendingInputs).toBe(0);
+  expect(hidden.predictedTick).toBe(hidden.finalizedTick);
+  expect(hidden.predicted!.jumpBufferTicksRemaining).toBe(0);
   await page.waitForTimeout(300);
   expect((await diagnostics(page)).authoritative!.x).toBeCloseTo(
     hidden.authoritative!.x,
@@ -208,6 +240,18 @@ test("prediction precedes acknowledgement; latency, correction, blur and stall r
   await page.locator("#export").click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toMatch(/derp-diagnostics/);
+  const path = (await download.path())!;
+  const exported = JSON.parse(readFileSync(path, "utf8"));
+  expect(exported.version).toBe(1);
+  expect(exported.diagnostics.build).toBe(BUILD_ID);
+  expect(exported.diagnostics.protocol).toBe(PROTOCOL_VERSION);
+  const trace = parseTrace(exported.trace);
+  const output = JSON.parse(
+    execFileSync("bun", ["run", "replay", path], { encoding: "utf8" }),
+  );
+  await initializePhysics();
+  expect(output.final).toEqual(replay(trace).at(-1) ?? trace.initial);
+  await observer.close();
 });
 test("WebGL2 failure explains requirements", async ({ page }) => {
   await page.addInitScript(() => {
@@ -261,4 +305,86 @@ test("changing latency before the first hello preserves admission", async ({
   });
   await focus(page);
   expect((await diagnostics(page)).players).toHaveLength(1);
+});
+
+test("jump forgiveness fixtures match Bun at every tick including boundary counters", async ({
+  page,
+}) => {
+  await page.goto("/?test=1");
+  await page.waitForFunction(() => !!window.__derp);
+  await initializePhysics();
+  for (const [name, trace] of Object.entries(jumpTraces())) {
+    const expected = replay(trace);
+    const actual = await page.evaluate(
+      (trace) => window.__derp.fixture(trace),
+      trace,
+    );
+    expect(actual.length, name).toBe(expected.length);
+    for (let i = 0; i < expected.length; i++) {
+      for (const key of ["x", "y", "vx", "vy"] as const)
+        expect(
+          Math.abs(actual[i]![key] - expected[i]![key]),
+          `${name}/${i}/${key}`,
+        ).toBeLessThan(0.0001);
+      for (const key of [
+        "grounded",
+        "coyoteTicksRemaining",
+        "jumpBufferTicksRemaining",
+      ] as const)
+        expect(actual[i]![key], `${name}/${i}/${key}`).toBe(expected[i]![key]);
+    }
+  }
+});
+test("unsolicited room baseline clears held keys and Space cannot cause repeated jumping", async ({
+  page,
+  browser,
+}) => {
+  await join(page);
+  await focus(page);
+  // Separate context prevents bringing the controller page forward from blurring the player.
+  const otherContext = await browser.newContext();
+  const second = await otherContext.newPage();
+  try {
+    await join(second);
+    await focus(page);
+    await page.keyboard.down("KeyD");
+    await expect
+      .poll(async () => (await diagnostics(page)).predicted!.vx)
+      .toBeGreaterThan(0);
+    // The second page may still be calibrating after its first baseline.
+    await expect(second.locator("#reset")).toBeEnabled();
+    const epoch = (await diagnostics(page)).inputEpoch;
+    await second.evaluate(() =>
+      (document.getElementById("reset") as HTMLButtonElement).click(),
+    );
+    await expect
+      .poll(async () => (await diagnostics(page)).inputEpoch)
+      .toBeGreaterThan(epoch);
+    await expect
+      .poll(async () => (await diagnostics(page)).predicted!.vx)
+      .toBe(0);
+    await page.waitForTimeout(300);
+    expect((await diagnostics(page)).predicted!.x).toBeCloseTo(-8, 4);
+    await page.keyboard.up("KeyD");
+    await focus(page);
+    await expect
+      .poll(async () => (await diagnostics(page)).predicted!.grounded)
+      .toBe(true);
+    await page.keyboard.down("Space");
+    await expect
+      .poll(async () => (await diagnostics(page)).predicted!.y)
+      .toBeGreaterThan(1.1);
+    for (let i = 0; i < 4; i++) await page.keyboard.down("Space");
+    await expect
+      .poll(async () => (await diagnostics(page)).predicted!.grounded)
+      .toBe(true);
+    await page.waitForTimeout(350);
+    expect((await diagnostics(page)).predicted!.grounded).toBe(true);
+    expect((await diagnostics(page)).predicted!.jumpBufferTicksRemaining).toBe(
+      0,
+    );
+    await page.keyboard.up("Space");
+  } finally {
+    await otherContext.close();
+  }
 });

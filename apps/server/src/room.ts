@@ -41,6 +41,7 @@ export class Room {
     if (!peer) return;
     peer.epoch = this.nextEpoch++;
     peer.inputs.clear();
+    peer.state = { ...peer.state, jumpBufferTicksRemaining: 0 };
     peer.active = true;
     return peer;
   }
@@ -49,6 +50,7 @@ export class Room {
     if (peer) {
       peer.active = false;
       peer.inputs.clear();
+      peer.state = { ...peer.state, jumpBufferTicksRemaining: 0 };
     }
   }
   input(id: string, input: InputFrame) {

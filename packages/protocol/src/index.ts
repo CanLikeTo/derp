@@ -1,7 +1,13 @@
-import { CONTENT_VERSION, type PlayerState } from "@derp/simulation";
+import {
+  CONTENT_VERSION,
+  MOVEMENT,
+  TRACE_VERSION,
+  type Trace,
+  type PlayerState,
+} from "@derp/simulation";
 export { CONTENT_VERSION };
-export const PROTOCOL_VERSION = 1;
-export const BUILD_ID = "playground-2026-08-31-v1";
+export const PROTOCOL_VERSION = 2;
+export const BUILD_ID = "playground-jump-forgiveness-v1";
 export const LIMITS = {
   messageBytes: 2048,
   futureTicks: 16,
@@ -108,11 +114,25 @@ export function parseClient(raw: string): ClientMessage {
 export function validPlayer(value: unknown): value is PlayerState {
   return (
     record(value) &&
-    keys(value, ["id", "slot", "x", "y", "vx", "vy", "grounded"]) &&
+    keys(value, [
+      "id",
+      "slot",
+      "x",
+      "y",
+      "vx",
+      "vy",
+      "grounded",
+      "coyoteTicksRemaining",
+      "jumpBufferTicksRemaining",
+    ]) &&
     text(value.id) &&
     [1, 2].includes(value.slot as number) &&
     ["x", "y", "vx", "vy"].every((key) => number(value[key])) &&
-    typeof value.grounded === "boolean"
+    typeof value.grounded === "boolean" &&
+    integer(value.coyoteTicksRemaining) &&
+    value.coyoteTicksRemaining <= MOVEMENT.coyoteTicks &&
+    integer(value.jumpBufferTicksRemaining) &&
+    value.jumpBufferTicksRemaining <= MOVEMENT.jumpBufferTicks
   );
 }
 export function parseServer(raw: string): ServerMessage {
@@ -204,4 +224,25 @@ export class Samples {
       max: Math.max(0, ...this.values),
     };
   }
+}
+
+export function parseTrace(value: unknown): Trace {
+  if (
+    !record(value) ||
+    !keys(value, ["version", "contentVersion", "initial", "inputs"]) ||
+    value.version !== TRACE_VERSION ||
+    value.contentVersion !== CONTENT_VERSION ||
+    !validPlayer(value.initial) ||
+    !Array.isArray(value.inputs) ||
+    value.inputs.length > 10000 ||
+    !value.inputs.every(
+      (input) =>
+        record(input) &&
+        keys(input, ["moveX", "jumpPressed"]) &&
+        [-1, 0, 1].includes(input.moveX as number) &&
+        typeof input.jumpPressed === "boolean",
+    )
+  )
+    throw new Error("Invalid or incompatible trace");
+  return value as Trace;
 }

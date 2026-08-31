@@ -1,10 +1,22 @@
+import { fixtureTrace } from "@derp/simulation";
 import { expect, test } from "bun:test";
-import { parseClient, parseServer, CONTENT_VERSION } from "@derp/protocol";
+import {
+  parseClient,
+  parseServer,
+  CONTENT_VERSION,
+  PROTOCOL_VERSION,
+  validPlayer,
+  parseTrace,
+} from "@derp/protocol";
 import { Outbox } from "../../apps/server/src/server";
 test("runtime validation rejects extra authority, wrong types, and bounds", () => {
   expect(
     parseClient(
-      JSON.stringify({ type: "hello", protocol: 1, content: CONTENT_VERSION }),
+      JSON.stringify({
+        type: "hello",
+        protocol: PROTOCOL_VERSION,
+        content: CONTENT_VERSION,
+      }),
     ).type,
   ).toBe("hello");
   const input = {
@@ -52,4 +64,26 @@ test("slow output retains only latest snapshot and closes after deadline", () =>
   buffered = 0;
   fresh.offer("baseline", false, socket as never, 0);
   expect(sent).toEqual(["baseline"]);
+});
+
+test("versioned replay and player counters fail closed", () => {
+  const trace = fixtureTrace();
+  expect(parseTrace(trace)).toEqual(trace);
+  for (const field of ["coyoteTicksRemaining", "jumpBufferTicksRemaining"]) {
+    for (const bad of [undefined, -1, 7, 0.5, null, "1"]) {
+      const state = { ...trace.initial, [field]: bad };
+      if (bad === undefined) Reflect.deleteProperty(state, field);
+      expect(validPlayer(state)).toBe(false);
+      expect(() => parseTrace({ ...trace, initial: state })).toThrow(
+        "incompatible trace",
+      );
+    }
+  }
+  for (const value of [
+    null,
+    { ...trace, version: 1 },
+    { ...trace, contentVersion: "playground-1" },
+    { ...trace, inputs: [{ moveX: 0, jumpPressed: true, elapsed: 100 }] },
+  ])
+    expect(() => parseTrace(value)).toThrow("incompatible trace");
 });

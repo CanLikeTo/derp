@@ -12,7 +12,7 @@ The Rapier gate ran the same 900-tick fixture in Bun, Vite development and the b
 
 Inputs address server ticks, with one command per player per tick and a 16-tick future window. The server advances time independently of traffic. Missing commands are neutral; stale commands are retired. Snapshot tick T finalizes every input through T, including commands that were absent or late. An epoch changes on each baseline so already-delayed work cannot reattach to a replaced timeline.
 
-Movement state is X/Y position, velocity and grounded status. Jump is a latched discrete edge, not repeated held intent. Each movement query uses the shared immutable room and ignores other players. Restoring the collider and refreshing Rapier before a query prevents stale broad-phase state. No dynamic physical interactions are claimed by this adapter.
+Movement state is X/Y position, velocity, grounded status and the two jump-forgiveness counters. Jump is a latched discrete edge, not repeated held intent. Each movement query uses the shared immutable room and ignores other players. Restoring the collider and refreshing Rapier before a query prevents stale broad-phase state. No dynamic physical interactions are claimed by this adapter.
 
 Horizontal and vertical movement use separate Rapier sweeps. The combined displacement path was found to suppress downward movement while continuously pushing into a platform side. A failing regression reproduced the cling; the separate sweeps preserve gravity and use surface normals to resolve blocked velocity. This is a rectangle-only arcade controller, not a claim of slope support.
 
@@ -20,7 +20,7 @@ Connection and preset changes first collect three RTT probes, then request a fre
 
 The first soak rehearsal exposed late commands and p95 corrections around 0.267 units when the client initially relied on nominal preset delay. Measuring RTT before enabling movement resolved that failure: the corrected rehearsal reported zero p95 correction. The correction budget was not relaxed. Tick-duration percentiles are calculated at 4 Hz rather than sorted anew for every recipient's snapshot; this avoids making the diagnostics dominate the workload being measured.
 
-A later reconnect exposed a discarded-baseline race during a latency-preset change. Resync requests therefore recover the current socket's player even when the request carries an older epoch. Inputs, suspend, and reset still require the current epoch; resync cannot claim another player or change gameplay state. Live integration tests explicitly discard a baseline and verify recovery, and browser tests repeatedly switch latency while joining.
+A later reconnect exposed a discarded-baseline race during a latency-preset change. Resync requests therefore recover the current socket's player even when the request carries an older epoch. Inputs, suspend, and reset still require the current epoch; resync cannot claim another player or change physical position/velocity; it clears buffered intent for the new epoch. Live integration tests explicitly discard a baseline and verify recovery, and browser tests repeatedly switch latency while joining.
 
 Preset changes before the first baseline restart admission, because clearing delayed work may cancel the initial hello before any player or epoch exists. A browser regression first reproduced the resulting timeout, then verified recovery after this change. The preceding soak was intentionally stopped at twelve reset/rejoin cycles to test the corrected source for the full duration.
 
@@ -40,6 +40,22 @@ Client and server queues have explicit caps. Server output retains only the late
 
 Simulation/protocol tests, browser workflows, and a repeatable soak are separate evidence. Headless frame timing is recorded but is not a hardware-floor or gameplay-capacity certification. The 30-minute soak uses two isolated browser processes so both can generate normal focused keyboard input; it does not bypass the application's input/transport path.
 
-The remaining major gates are human movement feel, real Chrome/Firefox/Safari hardware checks, real TCP impairment, broader physics features, and choosing whether to retain native Bun before implementing the larger lobby/network stack. Auth/SQLite/provider compatibility must be established before the auth milestone. No remote resources were created.
+The user-reported jump-forgiveness playtest passed on 31 August 2026. Remaining gates include broader movement/traversal feel, specific Chrome/Firefox/Safari hardware checks, real TCP impairment, broader physics features, and choosing whether to retain native Bun before implementing the larger lobby/network stack. Auth/SQLite/provider compatibility must be established before the auth milestone. No remote resources were created.
 
 Primary references: [Rapier initialization](https://rapier.rs/docs/user_guides/javascript/getting_started_js/), [character controller](https://rapier.rs/docs/user_guides/javascript/character_controller/), [Bun WebSockets](https://bun.com/docs/runtime/http/websockets), [Vite serving options](https://vite.dev/config/server-options).
+
+## Forgiving jump controls
+
+Coyote time and landing buffering are six simulation ticks each (~100 ms), initial tuning values for a local playtest. Releasing a pre-landing tap keeps it buffered, as explicitly chosen for dERP. This reduces timing precision required without changing speed, gravity, jump height, immediate reversal, geometry or equal air control. Jets and variable jump height remain separate experiments.
+
+Counters belong to authoritative replay state, not presentation or wall-clock timers. Landing consumes a buffered tap immediately at contact, with upward travel starting next tick. Separate sweeps and the existing wall-pressure falling fix remain intact. Full boundary semantics and lifecycle cancellation are specified in `PROTOCOL.md`.
+
+A retired command and buffered state are different: timely input can legitimately leave unconsumed state in a snapshot; an expired or missing command cannot be replayed to invent that state. Fresh epochs cancel buffered intent without changing physical momentum or refilling coyote. Local pending replay must also be discarded during suspension to avoid cosmetic phantom jumps while waiting for the server.
+
+Protocol/content/trace versions are 2 / playground-2 / 2. The diagnostic envelope stays at 1. Dependencies remain pinned. The earlier stickiness report was traced by the user to remote screen access; its rendering patch was reverted and is not reinstated here. Assess feel directly on the computer.
+
+Soak evidence now goes into a unique build-labelled run directory so previous reports remain available. Headless correctness and soak measurements do not stand in for direct human movement feedback or real-display timing. This is progress within IDEA's movement milestone, not completion of all its traversal or foundation investigations.
+
+The full jump-forgiveness soak completed but exceeded the correction budget. No lead/timing adaptation was added to hide that result. Before acceptance, isolate the late-input burst and retest the unchanged budget; browser RSS growth also needs interpretation beyond the server-only memory alarm. See `VALIDATION.md` for the measurements and their limits.
+
+The user subsequently reported that the jump-forgiveness playtest passed. Retain both six-tick windows; no movement adjustment is called for by that feedback. This human acceptance is separate from the unresolved automated correction budget and browser-memory observations.

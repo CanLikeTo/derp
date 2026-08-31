@@ -2,7 +2,8 @@ import RAPIER from "@dimforge/rapier2d-compat";
 
 export const DT = 1 / 60;
 export const TICK_MS = 1000 / 60;
-export const CONTENT_VERSION = "playground-1";
+export const CONTENT_VERSION = "playground-2";
+export const TRACE_VERSION = 2;
 export const MOVEMENT = {
   width: 0.8,
   height: 1.8,
@@ -11,6 +12,8 @@ export const MOVEMENT = {
   gravity: 30,
   fall: 20,
   margin: 0.01,
+  coyoteTicks: 6,
+  jumpBufferTicks: 6,
 } as const;
 export type Input = { moveX: -1 | 0 | 1; jumpPressed: boolean };
 export const NEUTRAL: Input = { moveX: 0, jumpPressed: false };
@@ -22,6 +25,8 @@ export type PlayerState = {
   vx: number;
   vy: number;
   grounded: boolean;
+  coyoteTicksRemaining: number;
+  jumpBufferTicksRemaining: number;
 };
 export const ROOM = {
   width: 24,
@@ -49,6 +54,8 @@ export function spawnState(id: string, slot: 1 | 2): PlayerState {
     vx: 0,
     vy: 0,
     grounded: false,
+    coyoteTicksRemaining: 0,
+    jumpBufferTicksRemaining: 0,
   };
 }
 
@@ -82,10 +89,15 @@ export class Simulation {
     // Refresh broad phase after restoring a prediction snapshot, including teleports.
     this.world.step();
     const vx = input.moveX * MOVEMENT.speed;
+    let buffer = input.jumpPressed
+      ? MOVEMENT.jumpBufferTicks
+      : state.jumpBufferTicksRemaining;
+    let coyote = state.coyoteTicksRemaining;
+    let launched = buffer > 0 && (state.grounded || coyote > 0);
+    if (launched) buffer = coyote = 0;
     const vy = Math.max(
       -MOVEMENT.fall,
-      (input.jumpPressed && state.grounded ? MOVEMENT.jump : state.vy) -
-        MOVEMENT.gravity * DT,
+      (launched ? MOVEMENT.jump : state.vy) - MOVEMENT.gravity * DT,
     );
     this.controller.computeColliderMovement(
       this.collider,
@@ -114,13 +126,23 @@ export class Simulation {
       0x00020001,
     );
     const vertical = this.controller.computedMovement();
-    const grounded = this.controller.computedGrounded();
+    let grounded = this.controller.computedGrounded();
     let resolvedVy = grounded && vy < 0 ? 0 : vy;
     for (let i = 0; i < this.controller.numComputedCollisions(); i++) {
       const normal = this.controller.computedCollision(i)?.normal1;
       if (normal && Math.abs(normal.y) > 0.5 && vy * normal.y < 0)
         resolvedVy = 0;
     }
+    // Landing consumes the tap now, without a second sweep or extra simulation time.
+    if (grounded && vy < 0 && buffer > 0) {
+      launched = true;
+      buffer = coyote = 0;
+      resolvedVy = MOVEMENT.jump;
+      grounded = false;
+    }
+    if (grounded || launched) coyote = 0;
+    else if (state.grounded) coyote = MOVEMENT.coyoteTicks;
+    else coyote = Math.max(0, coyote - 1);
     return {
       ...state,
       x: state.x + horizontal.x + vertical.x,
@@ -128,6 +150,8 @@ export class Simulation {
       vx: resolvedVx,
       vy: resolvedVy,
       grounded,
+      coyoteTicksRemaining: coyote,
+      jumpBufferTicksRemaining: Math.max(0, buffer - 1),
     };
   }
   dispose() {
@@ -136,7 +160,7 @@ export class Simulation {
 }
 
 export type Trace = {
-  version: 1;
+  version: typeof TRACE_VERSION;
   contentVersion: typeof CONTENT_VERSION;
   initial: PlayerState;
   inputs: Input[];
@@ -147,7 +171,7 @@ export function fixtureTrace(): Trace {
     jumpPressed: tick % 45 === 10,
   }));
   return {
-    version: 1,
+    version: TRACE_VERSION,
     contentVersion: CONTENT_VERSION,
     initial: spawnState("fixture", 1),
     inputs,

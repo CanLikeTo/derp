@@ -119,10 +119,10 @@ export async function startServer(port = 3001) {
   }
   function rebaseAll(reason: string) {
     for (const socket of sockets)
-      if (socket.data.joined) {
-        room.baseline(socket.data.id);
-        state(socket, "baseline", reason);
-      }
+      if (socket.data.joined) room.baseline(socket.data.id);
+    // Prepare every participant before exposing any global baseline.
+    for (const socket of sockets)
+      if (socket.data.joined) state(socket, "baseline", reason);
   }
   const server = Bun.serve<SocketData>({
     hostname: "127.0.0.1",
