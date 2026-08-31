@@ -1,0 +1,512 @@
+import {
+  initializePhysics,
+  fixtureTrace,
+  replay,
+  TICK_MS,
+} from "@derp/simulation";
+import {
+  BUILD_ID,
+  CONTENT_VERSION,
+  PROTOCOL_VERSION,
+  LIMITS,
+  parseServer,
+  Samples,
+  type ClientMessage,
+  type StateMessage,
+} from "@derp/protocol";
+import { Prediction, Interpolation } from "./prediction";
+import { Controls } from "./input";
+import { DelayQueue, PRESETS, type Preset } from "./network";
+import { View } from "./view";
+import "./style.css";
+
+const app = document.querySelector<HTMLElement>("#app")!;
+try {
+  await initializePhysics();
+  if (new URLSearchParams(location.search).has("compat")) {
+    const states = replay(fixtureTrace());
+    app.textContent = JSON.stringify({
+      gate: "browser-rapier",
+      passed: true,
+      final: states.at(-1),
+      states,
+    });
+  } else start();
+} catch (error) {
+  app.textContent = `Cannot start dERP. WebGL2 and WebAssembly are required. ${error instanceof Error ? error.message : error}`;
+}
+
+function start() {
+  app.innerHTML = `
+    <header class="header"><div class="brand">dERP<span>LAB</span></div><div class="build-label">PLAYGROUND / 001<br><span>AUTHORITATIVE MOVEMENT LAB</span></div><div class="local-badge"><i></i> LOCAL ONLY</div></header>
+    <section class="intro"><h1>Small room. <em>Big plans.</em></h1><p>Two players. One server. Absolutely no explosions. Yet.</p></section>
+    <div class="layout"><section class="arena-panel"><div class="panel-heading"><span>01 / TEST CHAMBER</span><span id="occupancy">0 / 2 PLAYERS</span></div>
+      <div id="viewport" tabindex="0" role="application" aria-label="Playground. A or D to move, Space to jump."><div class="arena-watermark" aria-hidden="true">dERP<br><small>WORK IN PROGRESS</small></div></div>
+      <div class="arena-footer"><span><kbd>A</kbd><kbd>D</kbd> MOVE <span class="divider">/</span> <kbd>SPACE</kbd> JUMP</span><span id="focus-label">CLICK CONNECT TO ENTER</span></div>
+      <div class="readouts"><div><span>SERVER</span><strong id="tick">—</strong><small>60 Hz fixed simulation</small></div><div><span>ROUND TRIP</span><strong id="rtt">—</strong><small>Measured, including added delay</small></div><div><span>CORRECTION P95</span><strong id="correction">—</strong><small>Compared at the same tick</small></div></div>
+    </section><aside>
+      <section class="control-panel"><div class="panel-heading">02 / CONNECTION</div><div id="status" role="status" aria-live="polite">Disconnected</div><p class="muted">Open a second window at this address to add another player.</p><button id="connect" class="primary">Connect <span>↗</span></button><div class="button-row"><button id="disconnect">Disconnect</button><button id="reconnect">Reconnect</button></div><button id="reset">Reset playground <span>↺</span></button></section>
+      <section class="control-panel"><div class="panel-heading">03 / NETWORK LAB</div><label for="latency">Added round-trip latency</label><select id="latency"><option value="local">0 ms · Local</option><option value="routine">100 ms · ±20 ms jitter</option><option value="degraded">200 ms · ±40 ms jitter</option></select><p class="muted small">Seeded application delay. Ordered delivery. This does not simulate TCP packet loss.</p><label class="checkbox"><input id="debug" type="checkbox"> Show collision / server ghost</label><p class="muted small">The ghost is a historical server pose, not a prediction-error marker.</p></section>
+      <section class="control-panel"><div class="panel-heading">04 / EVIDENCE</div><button id="export">Export diagnostics <span>↓</span></button><details><summary>Live diagnostics</summary><pre id="diagnostics"></pre></details></section>
+    </aside></div><footer class="footer"><span>BUN + THREE.JS + RAPIER</span><span>NO ACCOUNTS. NO PUBLIC SERVER. JUST THE FOUNDATION.</span></footer>`;
+  const element = <T extends HTMLElement>(id: string) =>
+    document.getElementById(id) as T;
+  const viewport = element("viewport");
+  const view = new View(viewport);
+  const prediction = new Prediction(),
+    interpolation = new Interpolation(),
+    controls = new Controls();
+  const frames = new Samples(),
+    rtts = new Samples(120);
+  let socket: WebSocket | undefined,
+    generation = 0,
+    preset: Preset = "local";
+  let status = "Disconnected",
+    active = false,
+    syncing = false,
+    playerId = "",
+    lead = 2,
+    rtt = 0;
+  let anchorTick = 0,
+    anchorAt = performance.now(),
+    lastFrame = performance.now(),
+    lastSnapshotAt = 0,
+    syncAt = 0;
+  let latest: StateMessage | undefined,
+    receivedBytes = 0,
+    sentBytes = 0,
+    resyncs = 0;
+  let firstTick = 0,
+    started = performance.now(),
+    lastPing = 0,
+    nonce = 0;
+  let timingReady = false,
+    calibrating = false,
+    calibrationSamples = 0;
+  const pendingPings = new Map<number, number>();
+  const events: { at: number; event: string }[] = [];
+  const note = (event: string) => {
+    events.push({ at: performance.now() - started, event });
+    if (events.length > 100) events.shift();
+  };
+  const outgoing = new DelayQueue(preset, () =>
+    disconnect("Outgoing delay queue exhausted"),
+  );
+  const incoming = new DelayQueue(preset, () =>
+    disconnect("Incoming delay queue exhausted"),
+  );
+  const serverTick = () =>
+    anchorTick + (performance.now() - anchorAt) / TICK_MS;
+  function setStatus(value: string) {
+    status = value;
+    element("status").textContent = value;
+  }
+  function send(message: ClientMessage) {
+    const current = socket;
+    const ownGeneration = generation;
+    outgoing.enqueue(() => {
+      if (
+        ownGeneration !== generation ||
+        current?.readyState !== WebSocket.OPEN
+      )
+        return;
+      if (current.bufferedAmount > 16384) {
+        disconnect("Outgoing connection congested; reconnect");
+        return;
+      }
+      const raw = JSON.stringify(message);
+      sentBytes += new TextEncoder().encode(raw).length;
+      current.send(raw);
+    });
+  }
+  function disconnect(reason = "Disconnected") {
+    generation++;
+    outgoing.clear();
+    incoming.clear();
+    pendingPings.clear();
+    socket?.close();
+    socket = undefined;
+    controls.clear();
+    prediction.clear();
+    interpolation.clear();
+    latest = undefined;
+    playerId = "";
+    syncing = false;
+    timingReady = false;
+    calibrating = false;
+    calibrationSamples = 0;
+    rtts.values = [];
+    setStatus(reason);
+    note(reason);
+  }
+  function connect() {
+    disconnect();
+    setStatus("Connecting…");
+    started = performance.now();
+    receivedBytes = 0;
+    sentBytes = 0;
+    const current = new WebSocket(
+      `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`,
+    );
+    socket = current;
+    const ownGeneration = generation;
+    current.addEventListener("open", () => {
+      if (ownGeneration === generation)
+        send({
+          type: "hello",
+          protocol: PROTOCOL_VERSION,
+          content: CONTENT_VERSION,
+        });
+    });
+    current.addEventListener("message", (event) => {
+      if (ownGeneration !== generation) return;
+      if (typeof event.data !== "string") {
+        disconnect("Invalid binary server message");
+        return;
+      }
+      receivedBytes += new TextEncoder().encode(event.data).length;
+      incoming.enqueue(() => {
+        if (ownGeneration !== generation) return;
+        try {
+          receive(event.data as string);
+        } catch (error) {
+          disconnect(
+            `Protocol error: ${error instanceof Error ? error.message : error}`,
+          );
+        }
+      });
+    });
+    current.addEventListener("close", () => {
+      if (ownGeneration !== generation) return;
+      // Preserve a queued explicit rejection before reporting the generic close.
+      incoming.enqueue(() => {
+        if (ownGeneration === generation)
+          disconnect("Connection closed; reconnect");
+      });
+    });
+    current.addEventListener("error", () => {
+      if (ownGeneration === generation) note("Socket connection error");
+    });
+    viewport.focus();
+    updateFocus();
+  }
+  function resync(reason: string) {
+    controls.clear();
+    if (!prediction.state || socket?.readyState !== WebSocket.OPEN || syncing)
+      return;
+    syncing = true;
+    syncAt = performance.now();
+    resyncs++;
+    note(reason);
+    setStatus("Synchronizing…");
+    send({ type: "resync", inputEpoch: prediction.epoch });
+  }
+  function ping() {
+    const now = performance.now();
+    lastPing = now;
+    pendingPings.set(++nonce, now);
+    while (pendingPings.size > 10)
+      pendingPings.delete(pendingPings.keys().next().value!);
+    send({ type: "ping", nonce });
+  }
+  function receive(raw: string) {
+    const message = parseServer(raw);
+    if (message.type === "rejected") {
+      disconnect(message.reason);
+      return;
+    }
+    if (message.type === "pong") {
+      const sent = pendingPings.get(message.nonce);
+      if (sent === undefined) return;
+      pendingPings.delete(message.nonce);
+      rtts.add(performance.now() - sent);
+      rtt = Math.max(...rtts.values.slice(-3));
+      if (calibrating) {
+        calibrationSamples++;
+        if (calibrationSamples < 3) ping();
+        else {
+          timingReady = true;
+          calibrating = false;
+          syncing = false;
+          resync("measured timing baseline");
+        }
+      }
+      return;
+    }
+    if (message.type === "baseline") {
+      latest = message;
+      playerId = message.playerId;
+      firstTick = message.tick;
+      if (!timingReady) {
+        prediction.baseline(message, message.tick);
+        interpolation.clear();
+        interpolation.push(message);
+        syncing = true;
+        syncAt = performance.now();
+        calibrating = true;
+        calibrationSamples = 0;
+        setStatus("Measuring connection timing…");
+        ping();
+        return;
+      }
+      if (!rtts.values.length) rtt = PRESETS[preset].delay * 2;
+      lead = Math.max(
+        2,
+        Math.min(
+          12,
+          Math.ceil((rtt / 2 + PRESETS[preset].jitter) / TICK_MS) + 2,
+        ),
+      );
+      anchorTick = message.tick;
+      anchorAt = performance.now() - rtt / 2;
+      prediction.baseline(message, Math.floor(serverTick()) + lead);
+      interpolation.clear();
+      interpolation.push(message);
+      syncing = false;
+      lastSnapshotAt = performance.now();
+      setStatus(
+        active ? "Connected · movement active" : "Connected · controls paused",
+      );
+      note(`baseline: ${message.reason}`);
+      if (!active) send({ type: "suspend", inputEpoch: prediction.epoch });
+    } else if (message.inputEpoch === prediction.epoch) {
+      latest = message;
+      lastSnapshotAt = performance.now();
+      interpolation.push(message);
+      if (!syncing)
+        try {
+          prediction.reconcile(message);
+        } catch {
+          resync("prediction history mismatch");
+        }
+    }
+  }
+  function updateFocus() {
+    const next =
+      document.hasFocus() &&
+      document.visibilityState === "visible" &&
+      document.activeElement === viewport;
+    if (next === active) return;
+    active = next;
+    controls.clear();
+    if (!active && prediction.state) {
+      send({ type: "suspend", inputEpoch: prediction.epoch });
+      setStatus("Connected · controls paused");
+    }
+    if (active && prediction.state) resync("focus restored");
+  }
+  viewport.addEventListener("pointerdown", () => viewport.focus());
+  for (const event of ["focus", "blur"])
+    window.addEventListener(event, updateFocus);
+  for (const event of ["focusin", "focusout", "visibilitychange"])
+    document.addEventListener(event, updateFocus);
+  window.addEventListener("keydown", (event) => {
+    if (
+      !active ||
+      !["KeyA", "KeyD", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)
+    )
+      return;
+    event.preventDefault();
+    controls.press(event.code, event.repeat);
+  });
+  window.addEventListener("keyup", (event) => {
+    controls.release(event.code);
+    if (active && ["ArrowLeft", "ArrowRight", "Space"].includes(event.code))
+      event.preventDefault();
+  });
+  element("connect").onclick = connect;
+  element("disconnect").onclick = () => disconnect();
+  element("reconnect").onclick = connect;
+  element("reset").onclick = () => {
+    if (prediction.state) send({ type: "reset", inputEpoch: prediction.epoch });
+    viewport.focus();
+  };
+  element<HTMLSelectElement>("latency").onchange = (event) => {
+    const restartAdmission = !!socket && !prediction.state;
+    preset = (event.target as HTMLSelectElement).value as Preset;
+    outgoing.clear();
+    incoming.clear();
+    outgoing.preset = preset;
+    incoming.preset = preset;
+    pendingPings.clear();
+    rtts.values = [];
+    rtt = PRESETS[preset].delay * 2;
+    timingReady = false;
+    calibrating = false;
+    calibrationSamples = 0;
+    syncing = false;
+    // Clearing delayed work can cancel hello before a player/epoch exists.
+    if (restartAdmission) connect();
+    else resync("latency preset changed");
+    viewport.focus();
+  };
+  function diagnostics() {
+    const seconds = Math.max(1, (performance.now() - started) / 1000);
+    return {
+      build: BUILD_ID,
+      content: CONTENT_VERSION,
+      status,
+      active,
+      playerId,
+      preset,
+      serverTick: latest?.tick ?? 0,
+      predictedTick: prediction.tick,
+      finalizedTick: prediction.finalizedTick,
+      rtt,
+      lead,
+      inputEpoch: prediction.epoch,
+      pendingInputs: prediction.history.size,
+      interpolationDepth: interpolation.snapshots.length,
+      underruns: interpolation.underruns,
+      staleMs: lastSnapshotAt ? performance.now() - lastSnapshotAt : 0,
+      correction: prediction.correction,
+      corrections: prediction.corrections.summary(),
+      frameMs: frames.summary(),
+      resyncs,
+      server: latest?.stats,
+      upstreamBps: sentBytes / seconds,
+      downstreamBps: receivedBytes / seconds,
+      queues: {
+        incoming: incoming.size,
+        outgoing: outgoing.size,
+        socket: socket?.bufferedAmount ?? 0,
+      },
+      predicted: prediction.state,
+      authoritative: prediction.authoritative,
+      players: latest?.players ?? [],
+      renderer: view.counts(),
+      firstTick,
+      recentEvents: events.slice(-10),
+    };
+  }
+  element("export").onclick = () => {
+    const data = {
+      version: 1,
+      capturedAt: new Date().toISOString(),
+      diagnostics: diagnostics(),
+      environment: {
+        browser: navigator.userAgent,
+        platform: navigator.platform,
+        width: innerWidth,
+        height: innerHeight,
+        dpr: devicePixelRatio,
+        hardwareConcurrency: navigator.hardwareConcurrency,
+      },
+      samples: {
+        frames: frames.values,
+        corrections: prediction.corrections.values,
+        rtt: rtts.values,
+      },
+      events,
+      trace: prediction.trace(),
+    };
+    const url = URL.createObjectURL(
+      new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `derp-diagnostics-${Date.now()}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const diagnosticTimer = setInterval(() => {
+    const data = diagnostics();
+    element("occupancy").textContent = `${data.players.length} / 2 PLAYERS`;
+    element("focus-label").textContent =
+      prediction.state && data.staleMs > 350
+        ? "WAITING FOR SERVER"
+        : active
+          ? "CONTROLS ACTIVE"
+          : prediction.state
+            ? "CLICK ARENA TO RESUME"
+            : "CLICK CONNECT TO ENTER";
+    element("tick").textContent = latest ? `${latest.tick}` : "—";
+    element("rtt").textContent = latest ? `${Math.round(rtt)} ms` : "—";
+    element("correction").textContent = latest
+      ? `${data.corrections.p95.toFixed(4)} u`
+      : "—";
+    element("diagnostics").textContent = JSON.stringify(data, null, 2);
+    element<HTMLButtonElement>("connect").disabled = !!socket;
+    element<HTMLButtonElement>("disconnect").disabled = !socket;
+    element<HTMLButtonElement>("reset").disabled = !prediction.state || syncing;
+    if (syncing && performance.now() - syncAt > 2000)
+      disconnect("Synchronization timed out; reconnect");
+  }, 250);
+  let disposed = false;
+  function frame(now: number) {
+    if (disposed) return;
+    const elapsed = now - lastFrame;
+    lastFrame = now;
+    if (document.visibilityState === "visible") frames.add(elapsed);
+    if (elapsed > 250 && active) resync("frame gap over 250 ms");
+    if (
+      socket?.readyState === WebSocket.OPEN &&
+      playerId &&
+      timingReady &&
+      now - lastPing > 1000
+    )
+      ping();
+    if (active && !syncing && prediction.state) {
+      if (now - lastSnapshotAt > 1000) resync("snapshots stale");
+      else {
+        const target = Math.floor(serverTick()) + lead;
+        if (target - prediction.tick > 16) resync("client timing debt");
+        else
+          try {
+            for (let i = 0; i < 5 && prediction.tick < target; i++)
+              send(prediction.advance(controls.sample()));
+          } catch {
+            resync("history bound");
+          }
+      }
+    }
+    prediction.smooth(Math.min(elapsed, 100));
+    const players = interpolation.at(
+      serverTick() - rtt / 2 / TICK_MS - 100 / TICK_MS,
+      playerId,
+    );
+    if (prediction.state)
+      players.push({
+        ...prediction.state,
+        x: prediction.state.x + prediction.offset.x,
+        y: prediction.state.y + prediction.offset.y,
+      });
+    view.draw(
+      players,
+      playerId,
+      prediction.authoritative,
+      element<HTMLInputElement>("debug").checked,
+    );
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+  // Test hooks exist only on explicitly requested local test pages; they cannot alter server state.
+  if (new URLSearchParams(location.search).has("test"))
+    Object.assign(window, {
+      __derp: {
+        diagnostics,
+        fixture: () => replay(fixtureTrace()),
+        trace: () => prediction.trace(),
+        perturb: () => {
+          if (prediction.state) prediction.state.x += 1;
+        },
+        stall: () => {
+          const end = performance.now() + 1000;
+          while (performance.now() < end) {
+            /* deliberate test stall */
+          }
+        },
+      },
+    });
+  window.addEventListener(
+    "pagehide",
+    () => {
+      disposed = true;
+      clearInterval(diagnosticTimer);
+      disconnect();
+      prediction.dispose();
+      view.dispose();
+    },
+    { once: true },
+  );
+}

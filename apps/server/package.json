@@ -1,0 +1,9 @@
+{
+  "name": "@derp/server",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@derp/simulation": "workspace:*",
+    "@derp/protocol": "workspace:*"
+  }
+}

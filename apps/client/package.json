@@ -1,0 +1,10 @@
+{
+  "name": "@derp/client",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@derp/protocol": "workspace:*",
+    "@derp/simulation": "workspace:*",
+    "three": "0.185.1"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "derp",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun tools/serve.ts dev",
+    "preview": "bun tools/serve.ts preview",
+    "check": "bun run format:check && tsc --noEmit && bun tools/boundaries.ts && bun test tests/unit tests/integration",
+    "format": "prettier --write '{apps,packages,tools,tests}/**/*.{ts,css,json}' package.json tsconfig.json playwright.config.ts '.github/**/*.yml'",
+    "format:check": "prettier --check '{apps,packages,tools,tests}/**/*.{ts,css,json}' package.json tsconfig.json playwright.config.ts '.github/**/*.yml'",
+    "build": "bun --bun vite build --config apps/client/vite.config.ts && bun build apps/server/src/main.ts --target=bun --outdir=dist/server",
+    "test:e2e": "bun run build && playwright test",
+    "soak": "bun run build && bun tools/soak.ts",
+    "replay": "bun tools/replay.ts",
+    "compat": "bun tools/compat.ts"
+  },
+  "devDependencies": {
+    "@derp/protocol": "workspace:*",
+    "@derp/simulation": "workspace:*",
+    "@playwright/test": "1.62.1",
+    "@types/bun": "1.4.0",
+    "@types/three": "0.185.4",
+    "prettier": "3.9.6",
+    "typescript": "7.0.2",
+    "vite": "8.2.2"
+  }
+}

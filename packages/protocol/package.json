@@ -1,0 +1,9 @@
+{
+  "name": "@derp/protocol",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@derp/simulation": "workspace:*"
+  }
+}

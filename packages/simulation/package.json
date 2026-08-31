@@ -1,0 +1,9 @@
+{
+  "name": "@derp/simulation",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@dimforge/rapier2d-compat": "0.20.0"
+  }
+}
