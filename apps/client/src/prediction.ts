@@ -1,6 +1,8 @@
 import {
   Simulation,
-  NEUTRAL,
+  neutralInput,
+  shortestAimDelta,
+  interpolateAimQ,
   CONTENT_VERSION,
   TRACE_VERSION,
   type RoomRules,
@@ -20,6 +22,7 @@ export class Prediction {
   rules: RoomRules = { jetsEnabled: false };
   ordinaryCorrections = new Samples();
   thrustCorrections = new Samples();
+  aimCorrections = new Samples();
   private simulation = new Simulation();
   state: PlayerState | undefined;
   authoritative: PlayerState | undefined;
@@ -29,6 +32,7 @@ export class Prediction {
   history = new Map<number, { input: InputFrame; state: PlayerState }>();
   corrections = new Samples();
   correction = 0;
+  aimCorrection = 0;
   offset = { x: 0, y: 0 };
   baseline(message: StateMessage, target: number) {
     const local = message.players.find(
@@ -42,9 +46,10 @@ export class Prediction {
     this.epoch = message.inputEpoch;
     this.history.clear();
     this.offset = { x: 0, y: 0 };
+    this.aimCorrection = 0;
     // Seed the prediction lead with neutral ticks; these are also neutral on the server.
     while (this.tick < target && this.history.size < LIMITS.history)
-      this.advance(NEUTRAL);
+      this.advance(neutralInput(this.state!.aimQ));
   }
   advance(input: Input): InputFrame {
     if (!this.state) throw new Error("Prediction needs a baseline");
@@ -79,6 +84,10 @@ export class Prediction {
         sameTick.y - authoritative.y,
       );
       this.corrections.add(this.correction);
+      this.aimCorrection = Math.abs(
+        shortestAimDelta(sameTick.aimQ, authoritative.aimQ),
+      );
+      this.aimCorrections.add(this.aimCorrection);
       (sameTick.jetActive || authoritative.jetActive
         ? this.thrustCorrections
         : this.ordinaryCorrections
@@ -90,6 +99,7 @@ export class Prediction {
         tick: message.tick,
         at: performance.now(),
         magnitude: this.correction,
+        aimMagnitude: this.aimCorrection,
       });
     }
     const old = this.state;
@@ -128,6 +138,7 @@ export class Prediction {
         moveX: entry.input.moveX,
         jumpPressed: entry.input.jumpPressed,
         jetHeld: entry.input.jetHeld,
+        aimQ: entry.input.aimQ,
       })),
     };
   }
@@ -192,6 +203,7 @@ export class Interpolation {
           ...a,
           x: a.x + (b.x - a.x) * t,
           y: a.y + (b.y - a.y) * t,
+          aimQ: interpolateAimQ(a.aimQ, b.aimQ, t),
         };
       });
   }

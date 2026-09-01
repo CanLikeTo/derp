@@ -102,6 +102,7 @@ test("live reset replaces epochs, stale input ignored, flood rejected", async ()
       tick: reset.tick + 16,
       moveX: 1,
       jumpPressed: true,
+      aimQ: 0,
     }),
   );
   for (let i = 0; i < 180; i++) {
@@ -130,6 +131,7 @@ test("far-future and oversized traffic cannot retain a seat", async () => {
       tick: baseline.tick + 100,
       moveX: 1,
       jumpPressed: true,
+      aimQ: 0,
     }),
   );
   await delay(50);
@@ -194,6 +196,7 @@ test("old protocol/content versions are explicitly rejected", async () => {
   for (const hello of [
     { type: "hello", protocol: 1, content: CONTENT_VERSION },
     { type: "hello", protocol: 3, content: "playground-2" },
+    { type: "hello", protocol: 4, content: "playground-3" },
     { type: "hello", protocol: PROTOCOL_VERSION, content: "playground-1" },
   ]) {
     const client = await connect(hello);

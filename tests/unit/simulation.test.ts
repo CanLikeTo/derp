@@ -33,7 +33,7 @@ test("floor, wall, ceiling and ledge collisions; restoration after teleport", ()
   expect(state.y).toBeCloseTo(0.9101, 3);
   state = sim.step(
     state,
-    { jetHeld: false, moveX: 0, jumpPressed: true },
+    { ...NEUTRAL, jumpPressed: true },
     { jetsEnabled: false },
   );
   let max = state.y;
@@ -50,11 +50,7 @@ test("floor, wall, ceiling and ledge collisions; restoration after teleport", ()
   expect(state.y).toBeCloseTo(2.4101, 3);
   state = { ...state, x: 11, y: 0.92, vy: 0 };
   for (let i = 0; i < 60; i++)
-    state = sim.step(
-      state,
-      { jetHeld: false, moveX: 1, jumpPressed: false },
-      { jetsEnabled: false },
-    );
+    state = sim.step(state, { ...NEUTRAL, moveX: 1 }, { jetsEnabled: false });
   expect(state.x).toBeLessThan(11.601);
   expect(state.x).toBeGreaterThan(11.58);
   sim.dispose();
@@ -81,11 +77,7 @@ test("holding into a platform side does not cancel falling velocity", () => {
     grounded: false,
   };
   for (let i = 0; i < 60; i++)
-    state = sim.step(
-      state,
-      { jetHeld: false, moveX: -1, jumpPressed: false },
-      { jetsEnabled: false },
-    );
+    state = sim.step(state, { ...NEUTRAL, moveX: -1 }, { jetsEnabled: false });
   expect(state.y).toBeLessThan(1);
   expect(state.grounded).toBe(true);
   sim.dispose();
@@ -114,7 +106,7 @@ test("room caps identity, consumes one input per tick, expires jumps and keeps g
   expect(room.join("c")).toBeUndefined();
   for (let i = 0; i < 60; i++) room.step();
   const frame = {
-    jetHeld: false,
+    ...NEUTRAL,
     type: "input" as const,
     inputEpoch: peer.epoch,
     tick: room.tick + 1,
@@ -164,7 +156,7 @@ test("snapshot tick retires missing inputs, restores and replays pending state",
   prediction.baseline(baseline, 0);
   for (let i = 1; i <= 12; i++) {
     const input = prediction.advance({
-      jetHeld: false,
+      ...NEUTRAL,
       moveX: 1,
       jumpPressed: i === 5,
     });
@@ -232,8 +224,7 @@ test("reconciliation preserves a timely retired buffer but never recreates a mis
     };
     prediction.baseline(baseline, 0);
     const press = prediction.advance({
-      jetHeld: false,
-      moveX: 0,
+      ...NEUTRAL,
       jumpPressed: true,
     });
     if (delivered) room.input("a", press);
@@ -279,10 +270,7 @@ test("suspension cancels pending replay and visual offset while authoritative st
     reason: "test",
   };
   prediction.baseline(base, 0);
-  room.input(
-    "a",
-    prediction.advance({ jetHeld: false, moveX: 0, jumpPressed: true }),
-  );
+  room.input("a", prediction.advance({ ...NEUTRAL, jumpPressed: true }));
   room.step();
   prediction.reconcile({
     ...base,
@@ -332,7 +320,7 @@ test("fresh epochs and suspend cancel buffered intent without refilling coyote o
     peer.state = { ...state };
     const oldEpoch = peer.epoch;
     room.input("a", {
-      jetHeld: false,
+      ...NEUTRAL,
       type: "input",
       inputEpoch: oldEpoch,
       tick: room.tick + 1,

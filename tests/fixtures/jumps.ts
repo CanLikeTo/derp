@@ -24,12 +24,12 @@ export function jumpTraces(): Record<string, Trace> {
   return {
     // Right edge of the left platform: horizontal sweep leaves its support at W.
     coyoteLast: trace({ x: -1.59, y: 2.4101, grounded: true }, [
-      { jetHeld: false, moveX: 1, jumpPressed: false },
+      { ...NEUTRAL, moveX: 1 },
       ...neutral(5),
       press,
     ]),
     coyoteExpired: trace({ x: -1.59, y: 2.4101, grounded: true }, [
-      { jetHeld: false, moveX: 1, jumpPressed: false },
+      { ...NEUTRAL, moveX: 1 },
       ...neutral(6),
       press,
     ]),
@@ -48,9 +48,8 @@ export function jumpTraces(): Record<string, Trace> {
     wall: trace(
       { x: 5.4101, y: 2.8 },
       Array.from({ length: 60 }, () => ({
-        jetHeld: false,
+        ...NEUTRAL,
         moveX: -1,
-        jumpPressed: false,
       })),
     ),
   };

@@ -1,4 +1,4 @@
-# dERP — local movement playground
+# dERP — local movement and aim playground
 
 A responsive, server-authoritative two-player foundation for a deeply unserious arena platformer. This build has two boxes, solid platforms, and useful diagnostics. Explosions come later.
 
@@ -11,7 +11,7 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-Open **http://127.0.0.1:5173** in two windows. Click **Connect** in each. Click the arena to activate its controls. A/D or Left/Right moves; Space jumps. Holding Space does not auto-jump. Click **Enable jets · resets both players** to enable the shared jet experiment, then hold either **Shift** key. Fuel lasts 45 simulation ticks (0.75 seconds); release both Shift keys while grounded to refill. Jets start disabled on server startup. You have six ticks (~100 ms) to jump after walking off an edge, and a tap shortly before landing is kept even if you release Space. A third connected player is rejected. Only the focused arena takes keyboard input; one keyboard cannot control both windows simultaneously.
+Open **http://127.0.0.1:5173** in two windows. Click **Connect** in each, then click the arena to activate it. Move the mouse inside the arena for full 360-degree aim; the local direction and reticle respond through prediction while the other window shows interpolated authoritative aim. A/D or Left/Right moves; Space jumps. Holding Space does not auto-jump. Click **Enable jets · resets both players** to enable the shared jet experiment, then hold either **Shift** key. Fuel lasts 45 simulation ticks (0.75 seconds); release both Shift keys while grounded to refill. Jets start disabled on server startup. You have six ticks (~100 ms) to jump after walking off an edge, and a tap shortly before landing is kept even if you release Space. A third connected player is rejected. Only the focused arena takes input; one keyboard cannot control both windows simultaneously.
 
 `Disconnect` releases a seat. `Reconnect` creates a fresh anonymous identity. `Reset playground` resets both players through the server. Selecting a latency preset requests a new timing baseline. The debug ghost is an older authoritative pose, not an error measurement.
 
@@ -52,19 +52,19 @@ Linux CI may need `bunx playwright install --with-deps chromium firefox webkit`.
 
 ## What is authoritative?
 
-The server owns movement, collisions, jet rules/fuel, player identities, admission, and reset. Clients send one movement/jump/thrust intent for a target server tick, never a position or a client-selected delta-time. Simulation runs at 60 Hz and full snapshots at 20 Hz. Missing commands mean neutral input; late jump commands do not fire later. A timely press can remain buffered for up to six ticks until a landing.
+The server owns movement, aim, collisions, jet rules/fuel, player identities, admission, and reset. Clients send one movement/jump/thrust/aim intent for a target server tick, never a position or a client-selected delta-time. Simulation runs at 60 Hz and full snapshots at 20 Hz. Missing commands neutralize movement, jump and thrust while preserving the last authoritative aim. Late input cannot rotate or jump later. A timely press can remain buffered for up to six ticks until a landing.
 
-Local prediction uses exactly the same movement code. A snapshot after tick T retires all input through T; the client restores the complete authoritative state and replays subsequent inputs. Remote players use interpolation with 100 ms extra buffering beyond estimated transit. Positions and collisions are X/Y only; rendered depth is cosmetic.
+Local prediction uses exactly the same simulation code. A snapshot after tick T retires all input through T; the client restores the complete authoritative state and replays subsequent inputs. Position and aim errors are compared at the same tick. Remote players use position and shortest-arc aim interpolation with 100 ms extra buffering beyond estimated transit. Positions and collisions are X/Y only; rendered depth and direction indicators are cosmetic.
 
 Blur/visibility loss clears input, pending prediction and buffered jump intent, and suspends commands. Focus restoration, long frame gaps, resets, and timing overruns obtain fresh baselines. Connection replacement invalidates delayed callbacks. There is no account continuity or reconnect reservation.
 
 ## Measurements and limitations
 
-Use **Export diagnostics** to download a bounded local JSON record with timing samples, counters, environment details, and a replayable pending-input trace. The record includes room rules, jet configuration/fuel/activity, jump windows, remaining-tick counters, per-player input outcomes, and up to 2,400 correlated timing records. Trace version 3 / content `playground-3` is required; older traces are intentionally rejected. Records are not transmitted to analytics. Network presets preserve ordering and apply seeded application-level delay/jitter; they do **not** reproduce TCP packet loss or establish internet fairness.
+Use **Export diagnostics** to download a bounded local JSON record with timing samples, counters, environment details, and a replayable pending-input trace. The record includes quantized predicted/authoritative aim and angular corrections, pointer validity, renderer resource counts, room rules, jet configuration/fuel/activity, jump windows, remaining-tick counters, per-player input outcomes, and up to 2,400 correlated timing records. Trace version 4 / content `playground-4` is required; older traces are intentionally rejected. Records are not transmitted to analytics. Network presets preserve ordering and apply seeded application-level delay/jitter; they do **not** reproduce TCP packet loss or establish internet fairness.
 
 Generated test reports and screenshots are under `artifacts/`; each soak writes `report.json`, `timing.jsonl`, screenshots and its log into a unique `artifacts/<build>-soak-<seconds>s-<timestamp>/` directory; Playwright failures also keep traces in `test-results/`. The soak checks queue/entity bounds, error counts, correction and traffic budgets, and post-warm-up memory. Its 32 MiB median-growth alarm is an investigation trigger, not a proof that every leak is absent. Inspect the time series as well as the pass/fail result.
 
-The earlier jump-forgiveness soak exceeded the correction budget (0.1333-unit p95 versus <0.08). The first timing prerequisite build still exceeded that budget. The timestamp-based clock fix now passes both browser matrices and the full 30-minute soak; retained-memory profiling found no accumulating gameplay resources. The fuel-limited jet experiment now passes 50 Bun tests, 39 browser scenarios in each serving mode, and its own 30-minute soak after adding measured browser-scheduling allowance. Human jet playtesting remains pending; see `docs/PLAYTEST.md` and `docs/VALIDATION.md`.
+The earlier jump-forgiveness soak exceeded the correction budget (0.1333-unit p95 versus <0.08). The first timing prerequisite build still exceeded that budget. The timestamp-based clock fix now passes both browser matrices and the full 30-minute soak; retained-memory profiling found no accumulating gameplay resources. The fuel-limited jet experiment passed its automated acceptance and has been retained as the current traversal rule. The authoritative aim slice has focused unit/integration and three-engine browser coverage; its soak and human playtest status are recorded separately in `docs/PLAYTEST.md` and `docs/VALIDATION.md`.
 
 Two headless test browsers verify behavior and resource trends, not representative GPU performance or simultaneous human fun. Playwright WebKit is not real Safari. Read `docs/VALIDATION.md` for what was actually run and what remains unverified.
 

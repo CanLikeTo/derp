@@ -95,7 +95,7 @@ test("a new edge refreshes one buffer slot without queuing multiple landing jump
   for (let tick = 0; tick < 100; tick++) {
     const next = sim.step(
       state,
-      { jetHeld: false, moveX: 0, jumpPressed: tick === 0 || tick === 4 },
+      { ...NEUTRAL, jumpPressed: tick === 0 || tick === 4 },
       { jetsEnabled: false },
     );
     if (tick === 4) expect(next.jumpBufferTicksRemaining).toBe(5);

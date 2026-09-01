@@ -22,12 +22,14 @@ test("runtime validation rejects extra authority, wrong types, and bounds", () =
   ).toBe("hello");
   const input = {
     jetHeld: false,
-    type: "input",
+    type: "input" as const,
     inputEpoch: 1,
     tick: 1,
-    moveX: 1,
+    moveX: 1 as const,
     jumpPressed: false,
+    aimQ: 0,
   };
+  expect(parseClient(JSON.stringify(input))).toEqual(input);
   for (const value of [
     { ...input, x: 42 },
     { ...input, moveX: 2 },
@@ -35,8 +37,13 @@ test("runtime validation rejects extra authority, wrong types, and bounds", () =
     { ...input, tick: 1.5 },
     { ...input, jumpPressed: 1 },
     { ...input, inputEpoch: null },
+    { ...input, aimQ: -32769 },
+    { ...input, aimQ: 32768 },
+    { ...input, aimQ: 1.5 },
   ])
     expect(() => parseClient(JSON.stringify(value))).toThrow();
+  const { aimQ: _aimQ, ...missingAim } = input;
+  expect(() => parseClient(JSON.stringify(missingAim))).toThrow();
   expect(() => parseClient(" ".repeat(2049))).toThrow();
   expect(() => parseClient("{")).toThrow();
   expect(() => parseServer('{"type":"snapshot"}')).toThrow();
@@ -127,6 +134,11 @@ test("versioned replay and player counters fail closed", () => {
       );
     }
   }
+  for (const aimQ of [undefined, -32769, 32768, 0.5, null, "0"]) {
+    const state = { ...trace.initial, aimQ };
+    if (aimQ === undefined) Reflect.deleteProperty(state, "aimQ");
+    expect(validPlayer(state)).toBe(false);
+  }
   for (const value of [
     null,
     { ...trace, version: 1 },
@@ -134,6 +146,10 @@ test("versioned replay and player counters fail closed", () => {
     {
       ...trace,
       inputs: [{ jetHeld: false, moveX: 0, jumpPressed: true, elapsed: 100 }],
+    },
+    {
+      ...trace,
+      inputs: trace.inputs.map(({ aimQ: _aimQ, ...input }) => input),
     },
   ])
     expect(() => parseTrace(value)).toThrow("incompatible trace");

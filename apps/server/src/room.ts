@@ -1,7 +1,7 @@
 import {
   Simulation,
   spawnState,
-  NEUTRAL,
+  neutralInput,
   type RoomRules,
   type PlayerState,
 } from "@derp/simulation";
@@ -105,7 +105,7 @@ export class Room {
       if (peer.active && !input) peer.timing.missing++;
       peer.state = this.simulation.step(
         peer.state,
-        input ?? NEUTRAL,
+        input ?? neutralInput(peer.state.aimQ),
         this.rules,
       );
       peer.inputs.delete(this.tick);

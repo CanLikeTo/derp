@@ -5,6 +5,7 @@ import {
   TICK_MS,
   MOVEMENT,
   JETS,
+  aimQToDegrees,
   type Trace,
 } from "@derp/simulation";
 import {
@@ -19,7 +20,7 @@ import {
 } from "@derp/protocol";
 import { Prediction, Interpolation } from "./prediction";
 import { predictionLead, SchedulingJitter, ServerClock } from "./timing";
-import { Controls } from "./input";
+import { Controls, PointerAim, type WorldPoint } from "./input";
 import { DelayQueue, PRESETS, type Preset } from "./network";
 import { View } from "./view";
 import "./style.css";
@@ -45,8 +46,8 @@ function start() {
     <header class="header"><div class="brand">dERP<span>LAB</span></div><div class="build-label">PLAYGROUND / 001<br><span>AUTHORITATIVE MOVEMENT LAB</span></div><div class="local-badge"><i></i> LOCAL ONLY</div></header>
     <section class="intro"><h1>Small room. <em>Big plans.</em></h1><p>Two players. One server. Absolutely no explosions. Yet.</p></section>
     <div class="layout"><section class="arena-panel"><div class="panel-heading"><span>01 / TEST CHAMBER</span><span id="occupancy">0 / 2 PLAYERS</span></div>
-      <div id="viewport" tabindex="0" role="application" aria-label="Playground. A or D to move, Space to jump. Either Shift key to thrust when jets are enabled."><div class="arena-watermark" aria-hidden="true">dERP<br><small>WORK IN PROGRESS</small></div></div>
-      <div class="arena-footer"><span><kbd>A</kbd><kbd>D</kbd> MOVE <span class="divider">/</span> <kbd>SPACE</kbd> JUMP <span class="divider">/</span> <kbd>SHIFT</kbd> JET</span><span id="focus-label">CLICK CONNECT TO ENTER</span></div>
+      <div id="viewport" tabindex="0" role="application" aria-label="Playground. Move the mouse to aim. A or D moves, Space jumps, and either Shift key thrusts when jets are enabled."><div class="arena-watermark" aria-hidden="true">dERP<br><small>WORK IN PROGRESS</small></div></div>
+      <div class="arena-footer"><span><kbd>MOUSE</kbd> AIM <span class="divider">/</span> <kbd>A</kbd><kbd>D</kbd> MOVE <span class="divider">/</span> <kbd>SPACE</kbd> JUMP <span class="divider">/</span> <kbd>SHIFT</kbd> JET</span><span id="focus-label">CLICK CONNECT TO ENTER</span></div>
       <div class="readouts"><div><span>SERVER</span><strong id="tick">—</strong><small>60 Hz fixed simulation</small></div><div><span>ROUND TRIP</span><strong id="rtt">—</strong><small>Measured, including added delay</small></div><div><span>CORRECTION P95</span><strong id="correction">—</strong><small>Compared at the same tick</small></div></div>
     </section><aside>
       <section class="control-panel"><div class="panel-heading">02 / CONNECTION</div><div id="status" role="status" aria-live="polite">Disconnected</div><p class="muted">Open a second window at this address to add another player.</p><button id="connect" class="primary">Connect <span>↗</span></button><div class="button-row"><button id="disconnect">Disconnect</button><button id="reconnect">Reconnect</button></div><button id="reset" disabled>Reset playground <span>↺</span></button></section>
@@ -60,7 +61,8 @@ function start() {
   const view = new View(viewport);
   const prediction = new Prediction(),
     interpolation = new Interpolation(),
-    controls = new Controls();
+    controls = new Controls(),
+    pointer = new PointerAim();
   const frames = new Samples(),
     rtts = new Samples(120);
   let socket: WebSocket | undefined,
@@ -89,6 +91,8 @@ function start() {
     calibrating = false,
     calibrationSamples = 0;
   let controlAt = -Infinity;
+  let currentPointerTarget: WorldPoint | undefined,
+    reticleVisible = false;
   const pendingPings = new Map<number, number>();
   const events: { at: number; event: string }[] = [];
   const note = (event: string) => {
@@ -173,6 +177,7 @@ function start() {
     socket?.close();
     socket = undefined;
     controls.clear();
+    pointer.clear();
     prediction.clear();
     interpolation.clear();
     latest = undefined;
@@ -372,6 +377,7 @@ function start() {
     if (next === active) return;
     active = next;
     controls.clear();
+    if (!active) pointer.clear();
     if (!active && prediction.state) {
       prediction.cancelPending();
       send({ type: "suspend", inputEpoch: prediction.epoch });
@@ -379,7 +385,15 @@ function start() {
     }
     if (active && prediction.state) resync("focus restored");
   }
-  viewport.addEventListener("pointerdown", () => viewport.focus());
+  viewport.addEventListener("pointerdown", (event) => {
+    viewport.focus();
+    updateFocus();
+    if (active) pointer.update(event.clientX, event.clientY);
+  });
+  viewport.addEventListener("pointermove", (event) => {
+    if (active) pointer.update(event.clientX, event.clientY);
+  });
+  viewport.addEventListener("pointerleave", () => pointer.clear());
   for (const event of ["focus", "blur"])
     window.addEventListener(event, updateFocus);
   for (const event of ["focusin", "focusout", "visibilitychange"])
@@ -487,6 +501,21 @@ function start() {
       underruns: interpolation.underruns,
       staleMs: lastSnapshotAt ? performance.now() - lastSnapshotAt : 0,
       correction: prediction.correction,
+      aim: {
+        pointerValid: pointer.valid,
+        reticleVisible,
+        target: currentPointerTarget,
+        predictedQ: prediction.state?.aimQ,
+        predictedDegrees:
+          prediction.state && aimQToDegrees(prediction.state.aimQ),
+        authoritativeQ: prediction.authoritative?.aimQ,
+        authoritativeDegrees:
+          prediction.authoritative &&
+          aimQToDegrees(prediction.authoritative.aimQ),
+        correctionSteps: prediction.aimCorrection,
+        correctionDegrees: Math.abs(aimQToDegrees(prediction.aimCorrection)),
+        corrections: prediction.aimCorrections.summary(),
+      },
       corrections: prediction.corrections.summary(),
       correctionsByActivity: {
         ordinary: prediction.ordinaryCorrections.summary(),
@@ -507,6 +536,10 @@ function start() {
       authoritative: prediction.authoritative,
       players: latest?.players ?? [],
       renderer: view.counts(),
+      resources: {
+        listeners: 11 + (socket ? 4 : 0),
+        domElements: document.querySelectorAll("*").length,
+      },
       firstTick,
       recentEvents: events.slice(-10),
     };
@@ -527,6 +560,7 @@ function start() {
       samples: {
         frames: frames.values,
         corrections: prediction.corrections.values,
+        aimCorrections: prediction.aimCorrections.values,
         rtt: rtts.values,
       },
       events,
@@ -579,6 +613,9 @@ function start() {
       now - lastPing > 1000
     )
       ping();
+    const pointerTarget: WorldPoint | undefined =
+      active && !syncing ? pointer.target(view.renderer.domElement) : undefined;
+    currentPointerTarget = pointerTarget;
     if (active && !syncing && prediction.state) {
       if (now - lastSnapshotAt > 1000) resync("snapshots stale");
       else {
@@ -586,8 +623,10 @@ function start() {
         if (target - prediction.tick > 16) resync("client timing debt");
         else
           try {
-            for (let i = 0; i < 5 && prediction.tick < target; i++)
-              send(prediction.advance(controls.sample()));
+            for (let i = 0; i < 5 && prediction.tick < target; i++) {
+              const aim = pointer.sample(prediction.state!, pointerTarget);
+              send(prediction.advance(controls.sample(aim.aimQ)));
+            }
           } catch {
             resync("history bound");
           }
@@ -600,6 +639,10 @@ function start() {
         ? `Jet fuel · ${prediction.state.jetFuelTicksRemaining} / ${JETS.fuelTicks}`
         : "Jets off";
     prediction.smooth(Math.min(elapsed, 100));
+    const displayedAim = prediction.state
+      ? pointer.sample(prediction.state, pointerTarget)
+      : { aimQ: 0, reticleVisible: false };
+    reticleVisible = active && !syncing && displayedAim.reticleVisible;
     const players = interpolation.at(
       serverTick() - rtt / 2 / TICK_MS - 100 / TICK_MS,
       playerId,
@@ -615,6 +658,8 @@ function start() {
       playerId,
       prediction.authoritative,
       element<HTMLInputElement>("debug").checked,
+      pointerTarget,
+      reticleVisible,
     );
     requestAnimationFrame(frame);
   }

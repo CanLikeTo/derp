@@ -27,8 +27,21 @@ type Diagnostic = {
   lead: number;
   schedulingJitterMs: number;
   queues: { incoming: number; outgoing: number };
-  renderer: { players: number; sceneObjects: number };
+  renderer: {
+    players: number;
+    directionLines: number;
+    reticles: number;
+    sceneObjects: number;
+  };
   corrections: { p95: number };
+  aim: {
+    pointerValid: boolean;
+    reticleVisible: boolean;
+    predictedQ?: number;
+    authoritativeQ?: number;
+    correctionSteps: number;
+    corrections: { p95: number; max: number };
+  };
 };
 declare global {
   interface Window {
@@ -78,6 +91,14 @@ async function expectLabelInsideArena(page: Page, slot: number) {
   expect(label.x + label.width).toBeLessThanOrEqual(arena.x + arena.width);
 }
 
+async function aimAtWorld(page: Page, x: number, y: number) {
+  const canvas = (await page.locator("#viewport canvas").boundingBox())!;
+  await page.mouse.move(
+    canvas.x + ((x + 12) / 24) * canvas.width,
+    canvas.y + (1 - y / 13.5) * canvas.height,
+  );
+}
+
 test("Rapier Bun/browser parity and usable fixed-aspect scene", async ({
   page,
 }, testInfo) => {
@@ -106,6 +127,7 @@ test("Rapier Bun/browser parity and usable fixed-aspect scene", async ({
     expect(actual[i]!.jumpBufferTicksRemaining).toBe(
       expected[i]!.jumpBufferTicksRemaining,
     );
+    expect(actual[i]!.aimQ).toBe(expected[i]!.aimQ);
   }
   await join(page);
   await page.getByLabel("Show collision / server ghost").check();
@@ -119,6 +141,75 @@ test("Rapier Bun/browser parity and usable fixed-aspect scene", async ({
     expect(box!.width / box!.height).toBeCloseTo(16 / 9, 1);
   }
   expect(errors).toEqual([]);
+});
+
+test("mouse aim predicts before authority, survives resize and clears on leave", async ({
+  page,
+  browser,
+}) => {
+  await join(page);
+  await focus(page);
+  let state = (await diagnostics(page)).predicted!;
+  await aimAtWorld(page, 11, state.y);
+  await expect
+    .poll(async () =>
+      Math.abs((await diagnostics(page)).aim.predictedQ ?? 99_999),
+    )
+    .toBeLessThan(100);
+  expect((await diagnostics(page)).aim).toMatchObject({
+    pointerValid: true,
+    reticleVisible: true,
+  });
+  await expect
+    .poll(async () =>
+      Math.abs((await diagnostics(page)).aim.authoritativeQ ?? 99_999),
+    )
+    .toBeLessThan(100);
+
+  await page.locator("#latency").selectOption("routine");
+  await focus(page);
+  const beforeAuthority = (await diagnostics(page)).aim.authoritativeQ!;
+  state = (await diagnostics(page)).predicted!;
+  await aimAtWorld(page, state.x, 12);
+  const immediateHandle = await page.waitForFunction(() => {
+    const diagnostic = window.__derp.diagnostics();
+    return Math.abs((diagnostic.aim.predictedQ ?? 0) - 16_384) < 100
+      ? diagnostic
+      : false;
+  });
+  const immediate = (await immediateHandle.jsonValue()) as Diagnostic;
+  expect(immediate.aim.authoritativeQ).toBe(beforeAuthority);
+
+  const otherContext = await browser.newContext({ deviceScaleFactor: 2 });
+  const other = await otherContext.newPage();
+  try {
+    await join(other);
+    await expect
+      .poll(async () => (await diagnostics(other)).players.length)
+      .toBe(2);
+    await expect
+      .poll(async () => (await diagnostics(other)).renderer.players)
+      .toBe(2);
+    expect((await diagnostics(other)).renderer).toMatchObject({
+      players: 2,
+      directionLines: 2,
+      reticles: 1,
+    });
+    await page.setViewportSize({ width: 700, height: 900 });
+    state = (await diagnostics(page)).predicted!;
+    await aimAtWorld(page, -11, state.y);
+    await expect
+      .poll(async () => Math.abs((await diagnostics(page)).aim.predictedQ ?? 0))
+      .toBeGreaterThan(32_600);
+    const canvas = (await page.locator("#viewport canvas").boundingBox())!;
+    await page.mouse.move(canvas.x - 4, canvas.y - 4);
+    await expect
+      .poll(async () => (await diagnostics(page)).aim.pointerValid)
+      .toBe(false);
+    expect((await diagnostics(page)).aim.reticleVisible).toBe(false);
+  } finally {
+    await otherContext.close();
+  }
 });
 test("two identities, movement, third rejection, reset and released seat", async ({
   page,
@@ -349,6 +440,7 @@ test("jump forgiveness fixtures match Bun at every tick including boundary count
         "grounded",
         "coyoteTicksRemaining",
         "jumpBufferTicksRemaining",
+        "aimQ",
       ] as const)
         expect(actual[i]![key], `${name}/${i}/${key}`).toBe(expected[i]![key]);
     }
@@ -515,6 +607,7 @@ test("jet traces match Bun including every fuel tick and collision; roof labels 
         "jumpBufferTicksRemaining",
         "jetFuelTicksRemaining",
         "jetActive",
+        "aimQ",
       ] as const)
         expect(actual[i]![key], `${name}/${i}/${key}`).toBe(expected[i]![key]);
     }

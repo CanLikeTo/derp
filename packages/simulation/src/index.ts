@@ -2,8 +2,14 @@ import RAPIER from "@dimforge/rapier2d-compat";
 
 export const DT = 1 / 60;
 export const TICK_MS = 1000 / 60;
-export const CONTENT_VERSION = "playground-3";
-export const TRACE_VERSION = 3;
+export const CONTENT_VERSION = "playground-4";
+export const TRACE_VERSION = 4;
+export const AIM_STEPS = 65_536;
+export const AIM_HALF_TURN = AIM_STEPS / 2;
+export const AIM_QUARTER_TURN = AIM_STEPS / 4;
+export const AIM_MIN = -AIM_HALF_TURN;
+export const AIM_MAX = AIM_HALF_TURN - 1;
+export const AIM_DEAD_ZONE = 0.1;
 export const MOVEMENT = {
   width: 0.8,
   height: 1.8,
@@ -27,8 +33,16 @@ export type Input = {
   moveX: -1 | 0 | 1;
   jumpPressed: boolean;
   jetHeld: boolean;
+  aimQ: number;
 };
-export const NEUTRAL: Input = { moveX: 0, jumpPressed: false, jetHeld: false };
+export const neutralInput = (aimQ: number): Input => ({
+  moveX: 0,
+  jumpPressed: false,
+  jetHeld: false,
+  aimQ: wrapAimQ(aimQ),
+});
+// Convenient zero-angle fixture. Runtime neutral ticks must use neutralInput(state.aimQ).
+export const NEUTRAL: Input = neutralInput(0);
 export type PlayerState = {
   id: string;
   slot: 1 | 2;
@@ -41,6 +55,7 @@ export type PlayerState = {
   jumpBufferTicksRemaining: number;
   jetFuelTicksRemaining: number;
   jetActive: boolean;
+  aimQ: number;
 };
 export const ROOM = {
   width: 24,
@@ -57,6 +72,40 @@ export const ROOM = {
 } as const;
 
 let initialization: Promise<void> | undefined;
+
+export function wrapAimQ(value: number): number {
+  const rounded = Math.round(value);
+  return (
+    ((((rounded + AIM_HALF_TURN) % AIM_STEPS) + AIM_STEPS) % AIM_STEPS) -
+    AIM_HALF_TURN
+  );
+}
+
+export function aimQFromVector(dx: number, dy: number): number {
+  if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0))
+    return 0;
+  return wrapAimQ((Math.atan2(dy, dx) / (Math.PI * 2)) * AIM_STEPS);
+}
+
+export function aimQToRadians(aimQ: number): number {
+  return (wrapAimQ(aimQ) / AIM_STEPS) * Math.PI * 2;
+}
+
+export function aimQToDegrees(aimQ: number): number {
+  return (wrapAimQ(aimQ) / AIM_STEPS) * 360;
+}
+
+// The signed representation maps an exact antipode to -32768: clockwise.
+export function shortestAimDelta(from: number, to: number): number {
+  return wrapAimQ(to - from);
+}
+
+export function interpolateAimQ(from: number, to: number, t: number): number {
+  return wrapAimQ(
+    from + shortestAimDelta(from, to) * Math.min(1, Math.max(0, t)),
+  );
+}
+
 export function initializePhysics(): Promise<void> {
   return (initialization ??= RAPIER.init());
 }
@@ -73,6 +122,7 @@ export function spawnState(id: string, slot: 1 | 2): PlayerState {
     jumpBufferTicksRemaining: 0,
     jetFuelTicksRemaining: JETS.fuelTicks,
     jetActive: false,
+    aimQ: slot === 1 ? 0 : AIM_MIN,
   };
 }
 
@@ -173,6 +223,7 @@ export class Simulation {
       fuel = Math.min(JETS.fuelTicks, fuel + JETS.refillPerTick);
     return {
       ...state,
+      aimQ: wrapAimQ(input.aimQ),
       x: state.x + horizontal.x + vertical.x,
       y: state.y + horizontal.y + vertical.y,
       vx: resolvedVx,
@@ -201,6 +252,7 @@ export function fixtureTrace(): Trace {
     moveX: (tick % 360 < 180 ? 1 : -1) as -1 | 1,
     jumpPressed: tick % 45 === 10,
     jetHeld: false,
+    aimQ: wrapAimQ(tick * 193),
   }));
   return {
     version: TRACE_VERSION,

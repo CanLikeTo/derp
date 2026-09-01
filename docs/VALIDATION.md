@@ -1,4 +1,27 @@
-# Playground validation — 31 August 2026
+# Playground validation — updated 1 September 2026
+
+## Authoritative mouse aim: automated acceptance passed
+
+Build `playground-aim-v1`, protocol 5, content `playground-4`, trace 4. Strict formatting, TypeScript and package boundaries pass. The focused Bun suite has 47 unit tests and 1,699 assertions; all pass. Eight loopback integration tests and 38 assertions also pass when run with local-bind permission. Aim coverage includes signed boundaries/cardinals/wrap, canvas corners, a deterministic clockwise antipode, 1,000 aim-only ticks with identical movement/jet state, missing-input preservation, duplicate authority, strict old/malformed contract rejection, reconciliation retirement and historical shortest-arc interpolation.
+
+Built-preview and Vite-development Playwright matrices each pass all 42 scenarios across Chromium, Firefox and WebKit. The aim workflow verifies immediate local prediction before a delayed authoritative response, two-player direction resources, DPR 2, resize remapping, pointer-leave cleanup and Bun/browser replay parity including exact `aimQ`. Existing movement, jump, jet, lifecycle, admission and WebGL-failure workflows remain green. The production build, Bun Rapier compatibility gate and 900-tick replay pass with the existing Rapier bundle-size advisory.
+
+Full soak: **18:22:51–18:52:55 UTC, 1 September 2026**, 1,800.93 seconds, **30 resets and 30 rejoins**. Every automated gate passed. Source fingerprint `63e23059bc9f4cbd7ea512128fb51be493f60d7a5e2a35f0a2014719d7eacbfe` remained unchanged. Two isolated Chromium clients used the routine 100 ms added-RTT preset, enabled jets and deterministic real pointer sweeps.
+
+| Measure | Worst sampled post-warm-up value | Gate |
+| --- | --- | --- |
+| Server work p95 / p99 | 1.743 / 2.390 ms | ≤8 / ≤12 ms |
+| Position correction p95 | 0 units | <0.08 units |
+| Aim correction p95 / maximum | 0 / 2,292 quantization steps | p95 = 0; maximum reported separately |
+| Upstream / downstream per player | 6.300 / 31.934 kB/s | ≤8 / ≤64 kB/s |
+| Server RSS median growth | 0.172 MiB | <32 MiB investigation alarm |
+| Renderer resources | 2 direction lines, 1 reticle, 11 GPU geometries, 3 programs | Stable and bounded |
+
+There were no browser errors or server overruns. Final clients each retained one document, 51 JavaScript listeners and 232–234 DOM nodes; samples temporarily reached 238–240 nodes during profiling/replacement. P1 used heap ranged 5.65–7.06 MB and finished at 5.79 MB; P2 ranged 7.42–7.43 MB and finished at 7.43 MB. Backing storage stayed near 2.69 MB. These samples and stable renderer counts found no accumulating gameplay resources; they do not certify every native browser cache or production workload.
+
+Evidence: `artifacts/playground-aim-v1-soak-1800s-1788286971711/`. Two earlier full-soak startup attempts ended before admission because the fixed-port supervisor reported a transient occupied-port condition; they are not counted as gameplay runs. A corrected 30-second rehearsal passed every gate before the full run.
+
+Installed-browser checks, human aim playtesting, real-display timing, real-network impairment and remote CI remain unverified.
 
 ## Jet experiment revision 2: automated acceptance passed
 
@@ -24,7 +47,7 @@ Browser-subtree RSS first/last-third post-warm-up medians were 1,427.18 / 1,427.
 
 Evidence: `artifacts/playground-jets-v2-soak-1800s-1788206789803/` contains the report, full timing stream/analysis, heap samples/snapshots/comparison, process observer, environment, both browser matrices, Bun check log and screenshots. Both final screenshots were checked for framing and visible controls/labels. The soak and observer exited normally.
 
-The run used Bun 1.4.0 and two isolated headless Chromium 151.0.7922.34 processes, 1440×1000, DPR cap 1, routine 100 ms added RTT, arm64 macOS 26.6.2 with ten logical CPUs. **The human jet playtest is pending.** Installed Chrome/Firefox/Safari manual checks, simultaneous two-human play, real-display/low-end performance, real-network impairment and remote CI remain unverified. Jets are still a keep/revise/remove experiment, not a production-capacity result.
+The run used Bun 1.4.0 and two isolated headless Chromium 151.0.7922.34 processes, 1440×1000, DPR cap 1, routine 100 ms added RTT, arm64 macOS 26.6.2 with ten logical CPUs. At that validation point, the human jet playtest and keep/revise/remove decision were pending; the later aim-slice decision retained the current jets. Installed Chrome/Firefox/Safari manual checks, simultaneous two-human play, real-display/low-end performance, real-network impairment and remote CI remained unverified.
 
 Revision 1's soak was deliberately stopped after its post-warm-up correction p95 reached 0.133333 units. Six resets and five rejoins completed; no unexpected server crash occurred. The report's server-exited reason reflects the deliberate stop. Evidence is retained in `artifacts/playground-jets-v1-soak-1800s-1788205612516/`, including `STOPPED.md`, minute-five heaps and correlated timing. Actual send delays reached 100–120 ms despite configured 40–60 ms application delay. Most large corrections coincided with late receipts.
 

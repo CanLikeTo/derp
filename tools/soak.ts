@@ -127,6 +127,13 @@ try {
     for (let i = 0; i < pages.length; i++) {
       const page = pages[i]!;
       const right = (Math.floor(step / 4) + i) % 2 === 0;
+      const arena = (await page.locator("#viewport canvas").boundingBox())!;
+      const sweep = ((step * 37 + i * 53) % 101) / 100;
+      const vertical = ((step * 61 + i * 29) % 101) / 100;
+      await page.mouse.move(
+        arena.x + arena.width * (0.05 + sweep * 0.9),
+        arena.y + arena.height * (0.05 + vertical * 0.9),
+      );
       await page.keyboard.up(right ? "KeyA" : "KeyD");
       await page.keyboard.down(right ? "KeyD" : "KeyA");
       if (step % 2 === i) await page.keyboard.press("Space");
@@ -187,6 +194,9 @@ try {
           client.queues.incoming > 256 ||
           client.queues.outgoing > 256 ||
           client.renderer.players > 2 ||
+          client.renderer.directionLines > 2 ||
+          client.renderer.directionLines !== client.renderer.players ||
+          client.renderer.reticles !== 1 ||
           client.rules.jetsEnabled !== jets
         )
           throw new Error("Resource bound exceeded");
@@ -267,6 +277,8 @@ try {
     thrustCorrectionP95: Math.max(
       ...clients.map((d) => d.correctionsByActivity.thrust.p95),
     ),
+    aimCorrectionP95: Math.max(...clients.map((d) => d.aim.corrections.p95)),
+    aimCorrectionMax: Math.max(...clients.map((d) => d.aim.corrections.max)),
     upstreamBps: Math.max(...clients.map((d) => d.upstreamBps)),
     downstreamBps: Math.max(...clients.map((d) => d.downstreamBps)),
     postWarmupMedianGrowthMB: growthMB,
@@ -279,6 +291,7 @@ try {
     sourceUnchanged: unchanged,
     tick: budgets.tickP95 <= 8 && budgets.tickP99 <= 12,
     corrections: budgets.correctionP95 < 0.08,
+    aimCorrections: budgets.aimCorrectionP95 === 0,
     activityCorrections:
       !jets ||
       (budgets.ordinaryCorrectionP95 < 0.08 &&
@@ -288,9 +301,11 @@ try {
     memory: growthMB < 32,
     renderer: clients.every(
       (client) =>
-        client.renderer.sceneObjects <= 14 &&
-        client.renderer.geometries <= 9 &&
-        client.renderer.programs <= 2,
+        client.renderer.sceneObjects <= 18 &&
+        client.renderer.geometries <= 11 &&
+        client.renderer.directionLines === client.renderer.players &&
+        client.renderer.reticles === 1 &&
+        client.renderer.programs <= 3,
     ),
   };
   report = {

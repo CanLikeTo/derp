@@ -9,28 +9,36 @@ For later releases, change the protocol version when message semantics become in
 The browser sends a hello after the WebSocket opens:
 
 ```json
-{"type":"hello","protocol":4,"content":"playground-3"}
+{"type":"hello","protocol":5,"content":"playground-4"}
 ```
 
 Only the server chooses the player UUID and slot. A compatible hello either receives a `baseline`, or a `rejected` message followed by closure. There are two player seats and eight total pending/live socket slots. Sending input before admission is invalid.
 
-A baseline contains `tick`, `serverTime`, `playerId`, `inputEpoch`, complete `players`, `rules`, recipient `inputTiming`, diagnostic `stats`, and a human-readable `reason`. Each player contains `id`, `slot`, `x`, `y`, `vx`, `vy`, `grounded`, `coyoteTicksRemaining`, `jumpBufferTicksRemaining`, `jetFuelTicksRemaining`, and `jetActive`. Room rules accompany every state message. Times use the server's monotonic clock; browser and server clock origins must not be compared directly.
+A baseline contains `tick`, `serverTime`, `playerId`, `inputEpoch`, complete `players`, `rules`, recipient `inputTiming`, diagnostic `stats`, and a human-readable `reason`. Each player contains `id`, `slot`, `x`, `y`, `vx`, `vy`, `grounded`, `coyoteTicksRemaining`, `jumpBufferTicksRemaining`, `jetFuelTicksRemaining`, `jetActive`, and `aimQ`. Room rules accompany every state message. Times use the server's monotonic clock; browser and server clock origins must not be compared directly.
 
 Before enabling movement, the client measures three round trips, then requests a fresh baseline. Changing latency during admission restarts the connection if a first baseline has not arrived. This prevents clearing a delayed hello without replacing it.
 
 ## Input and finalized time
 
 ```json
-{"type":"input","inputEpoch":7,"tick":121,"moveX":1,"jumpPressed":false,"jetHeld":false}
+{"type":"input","inputEpoch":7,"tick":121,"moveX":1,"jumpPressed":false,"jetHeld":false,"aimQ":8192}
 ```
 
-An input is one tick of intent. `moveX` is exactly -1, 0 or 1. The jump flag is a press edge, not a held button. Clients cannot send elapsed time, positions, velocities, or a target player. Unknown fields are rejected.
+An input is one tick of intent. `moveX` is exactly -1, 0 or 1. The jump flag is a press edge, not a held button. `aimQ` is a required signed 16-bit integer: 0 points right, 16384 up, -32768 left and -16384 down. Clients cannot send elapsed time, positions, velocities, cursor coordinates or a target player. Unknown fields are rejected.
 
-For current server tick T, only ticks T+1 through T+16 are accepted. The first valid input for a player's tick wins. Duplicates, expired inputs and old epochs cannot change already simulated time. Missing input at a tick means zero horizontal intent, no new jump press and neutral jet intent; gravity, collision and already-authoritative jump timers still run. A grounded neutral tick can recharge fuel. Input arrival never advances the room clock.
+For current server tick T, only ticks T+1 through T+16 are accepted. The first valid input for a player's tick wins. Duplicates, expired inputs and old epochs cannot change already simulated time. Missing input at a tick means zero horizontal intent, no new jump press and neutral jet intent while retaining the player's last aim; gravity, collision and already-authoritative jump timers still run. A grounded neutral tick can recharge fuel. Input arrival never advances the room clock.
 
 A snapshot for T describes state **after** that tick. It finalizes every input through T, whether delivered, dropped, absent or late. For example, after snapshot 120, the client deletes pending inputs 118, 119 and 120, restores state 120, and replays only 121 onward. A missing jump at 119 cannot execute later. A timely press may already be represented by a positive authoritative jump-buffer counter at T: retiring its command must preserve that state and allow it to trigger on a subsequent landing.
 
-Prediction error is the distance between the saved predicted state at T and authoritative state at T. The latest predicted pose is ahead in time and must not be compared directly with an older snapshot for this metric. Rendering offsets never modify simulation state.
+Prediction error is the distance between the saved predicted state at T and authoritative state at T. Aim correction is the absolute shortest signed-angle difference at the same tick. The latest predicted state is ahead in time and must not be compared directly with an older snapshot for either metric. Rendering offsets never modify simulation state.
+
+## Authoritative aim (protocol 5 / content playground-4 / trace 4)
+
+Aim has 65,536 quantization steps per turn. Angles wrap into -32768 through 32767; an exact half-turn follows the negative, clockwise path. P1 spawns facing right and P2 left. Reset and jet-mode changes restore those spawn directions. Baselines, suspension and resynchronization preserve current authoritative aim unless the action also respawns players.
+
+The browser maps the live renderer-canvas rectangle into the fixed 24 by 13.5 world view. It sends no pointer events or coordinates over the network: each predicted tick converts the current world target relative to that tick's predicted player position and includes only `aimQ` in the normal input frame. A target within 0.1 world units retains the prior direction. Aim never changes collision, movement, jump eligibility or fuel.
+
+Local reconciliation restores authoritative aim and replays only inputs newer than the finalized snapshot. Remote aim uses the same before/after snapshots and historical render tick as remote position, interpolating the shortest arc. Buffer underruns hold both pose and aim; there is no extrapolation. Build ID: `playground-aim-v1`. The diagnostic envelope remains version 1.
 
 ## Control messages
 
@@ -85,7 +93,7 @@ The command also emits `biased-baseline.json`, a regression control with the old
 
 ## Fuel-limited jet experiment (protocol 4 / content playground-3 / trace 3)
 
-The current hello requires protocol **4** and content **`playground-3`**. Old clients must reload; old traces are rejected. Input frames additionally require `jetHeld: boolean`. State snapshots require `rules: { jetsEnabled: boolean }`, and every player has integer `jetFuelTicksRemaining` in 0–45 and boolean `jetActive`. Traces carry the same explicit rules and complete inputs/state.
+That jet build introduced protocol **4** and content **`playground-3`**; the current aim build supersedes them with protocol 5 and content `playground-4`. Jet input still requires `jetHeld: boolean`. State snapshots require `rules: { jetsEnabled: boolean }`, and every player has integer `jetFuelTicksRemaining` in 0–45 and boolean `jetActive`. Traces carry the same explicit rules and complete inputs/state.
 
 Either Shift key holds thrust. Both must be released to refill on the ground. There are 45 fuel ticks; an active tick consumes one, applies upward acceleration 45 alongside gravity 30, and caps upward velocity at 12. Releasing removes acceleration, not existing momentum. Grounded released ticks refill one, capped at 45. Holding an exhausted jet never refills or relaunches. Players spawn with full fuel. `jetActive` records thrust applied on the completed tick, including the final fuel-consuming tick with fuel zero.
 

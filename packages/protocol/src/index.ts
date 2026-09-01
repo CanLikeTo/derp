@@ -2,14 +2,16 @@ import {
   CONTENT_VERSION,
   MOVEMENT,
   JETS,
+  AIM_MIN,
+  AIM_MAX,
   type RoomRules,
   TRACE_VERSION,
   type Trace,
   type PlayerState,
 } from "@derp/simulation";
 export { CONTENT_VERSION };
-export const PROTOCOL_VERSION = 4;
-export const BUILD_ID = "playground-jets-v2";
+export const PROTOCOL_VERSION = 5;
+export const BUILD_ID = "playground-aim-v1";
 export const LIMITS = {
   messageBytes: 2048,
   futureTicks: 16,
@@ -26,6 +28,7 @@ export type InputFrame = {
   moveX: -1 | 0 | 1;
   jumpPressed: boolean;
   jetHeld: boolean;
+  aimQ: number;
 };
 export type ClientMessage =
   | { type: "setJets"; inputEpoch: number; enabled: boolean }
@@ -100,6 +103,13 @@ function integer(value: unknown): value is number {
 function number(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
+function aim(value: unknown): value is number {
+  return (
+    Number.isInteger(value) &&
+    (value as number) >= AIM_MIN &&
+    (value as number) <= AIM_MAX
+  );
+}
 function text(value: unknown): value is string {
   return typeof value === "string" && value.length <= 160;
 }
@@ -126,12 +136,14 @@ export function parseClient(raw: string): ClientMessage {
           "moveX",
           "jumpPressed",
           "jetHeld",
+          "aimQ",
         ]) &&
         integer(value.inputEpoch) &&
         integer(value.tick) &&
         [-1, 0, 1].includes(value.moveX as number) &&
         typeof value.jumpPressed === "boolean" &&
-        typeof value.jetHeld === "boolean"
+        typeof value.jetHeld === "boolean" &&
+        aim(value.aimQ)
       )
         return value as InputFrame;
       break;
@@ -171,6 +183,7 @@ export function validPlayer(value: unknown): value is PlayerState {
       "jumpBufferTicksRemaining",
       "jetFuelTicksRemaining",
       "jetActive",
+      "aimQ",
     ]) &&
     text(value.id) &&
     [1, 2].includes(value.slot as number) &&
@@ -182,7 +195,8 @@ export function validPlayer(value: unknown): value is PlayerState {
     value.jumpBufferTicksRemaining <= MOVEMENT.jumpBufferTicks &&
     integer(value.jetFuelTicksRemaining) &&
     value.jetFuelTicksRemaining <= JETS.fuelTicks &&
-    typeof value.jetActive === "boolean"
+    typeof value.jetActive === "boolean" &&
+    aim(value.aimQ)
   );
 }
 function validInputTiming(value: unknown): value is InputTiming {
@@ -334,10 +348,11 @@ export function parseTrace(value: unknown): Trace {
     !value.inputs.every(
       (input) =>
         record(input) &&
-        keys(input, ["moveX", "jumpPressed", "jetHeld"]) &&
+        keys(input, ["moveX", "jumpPressed", "jetHeld", "aimQ"]) &&
         [-1, 0, 1].includes(input.moveX as number) &&
         typeof input.jumpPressed === "boolean" &&
-        typeof input.jetHeld === "boolean",
+        typeof input.jetHeld === "boolean" &&
+        aim(input.aimQ),
     )
   )
     throw new Error("Invalid or incompatible trace");

@@ -1,6 +1,23 @@
+# Authoritative mouse-aim playtest
+
+Status: **pending human playtest**. Run `bun run dev` directly on the computer, connect two windows, and keep the current jets available. Test each item at 0 ms, 100 ms and 200 ms added round-trip latency.
+
+1. Sweep the mouse through all four quadrants and cross the left-facing wrap repeatedly. The local line and reticle should follow immediately without changing movement.
+2. Aim while running, reversing, jumping, falling, landing and jetting. The direction line must stay anchored to the rendered box and must not rotate the collider.
+3. Watch the other window. Remote direction changes should stay attached to the interpolated remote pose and take the shortest visible route around the wrap.
+4. Resize the browser narrow and wide, scroll the page, and try browser zoom. The reticle must remain under the pointer inside the fixed arena.
+5. Move within roughly 0.1 world units of the local player's centre. The reticle should hide and the prior direction should remain stable rather than flicker.
+6. Leave the arena, switch windows, hide/restore the tab, reset, toggle jet mode, reload and reconnect. No stale pointer direction may continue after focus loss. P1 should respawn facing right and P2 left.
+7. Enable the server ghost. Its line is historical authoritative aim, so separation from the predicted local line under latency is expected.
+8. Export diagnostics after a surprise. Record `aim.pointerValid`, predicted/authoritative `aimQ`, angular correction steps/degrees, preset, browser/OS, reproduction steps and expected direction.
+
+Accept the slice when local aiming feels immediate at all three presets, remote aim is readable, resize alignment remains correct and aiming does not change movement or jet feel. Weapons, firing, recoil, animation, pointer lock and aim assist are deliberately absent.
+
+---
+
 # Jet experiment playtest
 
-Status: **pending human playtest**. Start `bun run dev`, connect two windows at `http://127.0.0.1:5173`, and test directly on the computer. The server starts with jets off. Click **Enable jets · resets both players**; either player can change the shared mode.
+Status: **retained by product decision on 1 September 2026**. This records the choice to keep the current jet rules while adding aim; it does not invent browser-specific human observations that were not supplied. Start `bun run dev`, connect two windows at `http://127.0.0.1:5173`, and test directly on the computer. The server starts with jets off. Click **Enable jets · resets both players**; either player can change the shared mode.
 
 1. Hold either Shift key for a short burst. Fuel lasts 0.75 seconds of thrust. Releasing Shift removes acceleration but keeps upward momentum.
 2. Exhaust the fuel and keep Shift held through landing: it must stay empty. Release both Shift keys on the ground to refill. Try holding both and releasing only one.
@@ -11,7 +28,7 @@ Status: **pending human playtest**. Start `bun run dev`, connect two windows at 
 7. Use the mode button with Tab/Enter. Shift+Tab must still navigate normally. The button and Reset share a brief cooldown.
 8. Export diagnostics after a surprise and record the build, browser/OS, preset, steps and expected behavior. Replay the pending-input trace with `bun run replay path/to/export.json`.
 
-Decision: **keep, revise or remove jets** before combat. Record whether fuel/refill is clear, the burst feels controllable, ordinary jumps remain useful, and the remote indicator reads correctly. This is not a maximum-player, real-network or low-end performance test.
+Decision: **keep the current jets** for this aim slice. Continue recording whether fuel/refill is clear, the burst feels controllable, ordinary jumps remain useful, and the remote indicator reads correctly. This is not a maximum-player, real-network or low-end performance test.
 
 ---
 

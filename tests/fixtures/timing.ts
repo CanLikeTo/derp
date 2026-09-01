@@ -161,6 +161,7 @@ export async function timingScenario(options: {
               jetHeld: false,
               moveX: Math.floor(now / 1000) % 2 ? -1 : 1,
               jumpPressed: false,
+              aimQ: peer.state.aimQ,
             });
             const generatedAt = now;
             enqueue("up", () => {
