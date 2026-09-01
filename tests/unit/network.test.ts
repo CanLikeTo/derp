@@ -3,6 +3,28 @@ import { DelayQueue } from "../../apps/client/src/network";
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+test("queue reports browser scheduling lateness before delivering the delayed message", async () => {
+  const events: string[] = [];
+  let lateness = 0;
+  const queue = new DelayQueue(
+    "local",
+    () => {},
+    (value) => {
+      lateness = value;
+      events.push("measured");
+    },
+  );
+  try {
+    queue.enqueue(() => events.push("delivered"));
+    Bun.sleepSync(30);
+    await delay(10);
+    expect(lateness).toBeGreaterThanOrEqual(20);
+    expect(events).toEqual(["measured", "delivered"]);
+  } finally {
+    queue.clear();
+  }
+});
+
 test("jitter preserves command order, preset clearing cancels old callbacks", async () => {
   const delivered: number[] = [];
   const queue = new DelayQueue("routine", () => {

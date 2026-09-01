@@ -2,8 +2,8 @@ import RAPIER from "@dimforge/rapier2d-compat";
 
 export const DT = 1 / 60;
 export const TICK_MS = 1000 / 60;
-export const CONTENT_VERSION = "playground-2";
-export const TRACE_VERSION = 2;
+export const CONTENT_VERSION = "playground-3";
+export const TRACE_VERSION = 3;
 export const MOVEMENT = {
   width: 0.8,
   height: 1.8,
@@ -15,8 +15,20 @@ export const MOVEMENT = {
   coyoteTicks: 6,
   jumpBufferTicks: 6,
 } as const;
-export type Input = { moveX: -1 | 0 | 1; jumpPressed: boolean };
-export const NEUTRAL: Input = { moveX: 0, jumpPressed: false };
+export const JETS = {
+  fuelTicks: 45,
+  acceleration: 45,
+  upwardSpeed: 12,
+  refillPerTick: 1,
+} as const;
+export type RoomRules = { jetsEnabled: boolean };
+export const DISABLED_RULES: RoomRules = { jetsEnabled: false };
+export type Input = {
+  moveX: -1 | 0 | 1;
+  jumpPressed: boolean;
+  jetHeld: boolean;
+};
+export const NEUTRAL: Input = { moveX: 0, jumpPressed: false, jetHeld: false };
 export type PlayerState = {
   id: string;
   slot: 1 | 2;
@@ -27,11 +39,14 @@ export type PlayerState = {
   grounded: boolean;
   coyoteTicksRemaining: number;
   jumpBufferTicksRemaining: number;
+  jetFuelTicksRemaining: number;
+  jetActive: boolean;
 };
 export const ROOM = {
   width: 24,
   height: 13.5,
   solids: [
+    { x: 0, y: 13.25, width: 24, height: 0.5 },
     { x: 0, y: -0.5, width: 24, height: 1 },
     { x: -12.5, y: 6.5, width: 1, height: 14 },
     { x: 12.5, y: 6.5, width: 1, height: 14 },
@@ -56,6 +71,8 @@ export function spawnState(id: string, slot: 1 | 2): PlayerState {
     grounded: false,
     coyoteTicksRemaining: 0,
     jumpBufferTicksRemaining: 0,
+    jetFuelTicksRemaining: JETS.fuelTicks,
+    jetActive: false,
   };
 }
 
@@ -84,7 +101,7 @@ export class Simulation {
     this.world.timestep = DT;
     this.world.step();
   }
-  step(state: PlayerState, input: Input): PlayerState {
+  step(state: PlayerState, input: Input, rules: RoomRules): PlayerState {
     this.collider.setTranslation({ x: state.x, y: state.y });
     // Refresh broad phase after restoring a prediction snapshot, including teleports.
     this.world.step();
@@ -95,10 +112,18 @@ export class Simulation {
     let coyote = state.coyoteTicksRemaining;
     let launched = buffer > 0 && (state.grounded || coyote > 0);
     if (launched) buffer = coyote = 0;
-    const vy = Math.max(
+    const jetActive =
+      rules.jetsEnabled && input.jetHeld && state.jetFuelTicksRemaining > 0;
+    let fuel = rules.jetsEnabled
+      ? state.jetFuelTicksRemaining - (jetActive ? 1 : 0)
+      : JETS.fuelTicks;
+    let vy = Math.max(
       -MOVEMENT.fall,
-      (launched ? MOVEMENT.jump : state.vy) - MOVEMENT.gravity * DT,
+      (launched ? MOVEMENT.jump : state.vy) -
+        MOVEMENT.gravity * DT +
+        (jetActive ? JETS.acceleration * DT : 0),
     );
+    if (jetActive) vy = Math.min(vy, JETS.upwardSpeed);
     this.controller.computeColliderMovement(
       this.collider,
       { x: vx * DT, y: 0 },
@@ -140,9 +165,12 @@ export class Simulation {
       resolvedVy = MOVEMENT.jump;
       grounded = false;
     }
-    if (grounded || launched) coyote = 0;
-    else if (state.grounded) coyote = MOVEMENT.coyoteTicks;
+    if (grounded || launched || jetActive) coyote = 0;
+    else if (state.grounded && (!rules.jetsEnabled || !state.jetActive))
+      coyote = MOVEMENT.coyoteTicks;
     else coyote = Math.max(0, coyote - 1);
+    if (rules.jetsEnabled && grounded && !input.jetHeld)
+      fuel = Math.min(JETS.fuelTicks, fuel + JETS.refillPerTick);
     return {
       ...state,
       x: state.x + horizontal.x + vertical.x,
@@ -152,6 +180,8 @@ export class Simulation {
       grounded,
       coyoteTicksRemaining: coyote,
       jumpBufferTicksRemaining: Math.max(0, buffer - 1),
+      jetFuelTicksRemaining: fuel,
+      jetActive,
     };
   }
   dispose() {
@@ -163,17 +193,20 @@ export type Trace = {
   version: typeof TRACE_VERSION;
   contentVersion: typeof CONTENT_VERSION;
   initial: PlayerState;
+  rules: RoomRules;
   inputs: Input[];
 };
 export function fixtureTrace(): Trace {
   const inputs: Input[] = Array.from({ length: 900 }, (_, tick) => ({
     moveX: (tick % 360 < 180 ? 1 : -1) as -1 | 1,
     jumpPressed: tick % 45 === 10,
+    jetHeld: false,
   }));
   return {
     version: TRACE_VERSION,
     contentVersion: CONTENT_VERSION,
     initial: spawnState("fixture", 1),
+    rules: { ...DISABLED_RULES },
     inputs,
   };
 }
@@ -183,7 +216,7 @@ export function replay(trace: Trace): PlayerState[] {
   const states: PlayerState[] = [];
   try {
     for (const input of trace.inputs) {
-      state = sim.step(state, input);
+      state = sim.step(state, input, trace.rules);
       states.push(state);
     }
   } finally {

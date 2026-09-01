@@ -1,3 +1,4 @@
+import { jetTraces } from "../fixtures/jets";
 import { jumpTraces } from "../fixtures/jumps";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -11,6 +12,7 @@ import {
   type PlayerState,
 } from "@derp/simulation";
 type Diagnostic = {
+  rules: { jetsEnabled: boolean };
   status: string;
   active: boolean;
   playerId: string;
@@ -22,6 +24,8 @@ type Diagnostic = {
   authoritative?: PlayerState;
   players: { id: string }[];
   resyncs: number;
+  lead: number;
+  schedulingJitterMs: number;
   queues: { incoming: number; outgoing: number };
   renderer: { players: number; sceneObjects: number };
   corrections: { p95: number };
@@ -30,6 +34,7 @@ declare global {
   interface Window {
     __derp: {
       diagnostics(): Diagnostic;
+      timingRecords(): Record<string, string | number>[];
       fixture(trace?: Trace): ReturnType<typeof replay>;
       perturb(): void;
       stall(): void;
@@ -56,6 +61,16 @@ async function focus(page: Page) {
     .poll(async () => (await diagnostics(page)).status)
     .toContain("movement active");
 }
+async function setJets(page: Page, enabled: boolean) {
+  await focus(page);
+  if ((await diagnostics(page)).rules.jetsEnabled !== enabled) {
+    await page.locator("#jets").click();
+    await expect
+      .poll(async () => (await diagnostics(page)).rules.jetsEnabled)
+      .toBe(enabled);
+    await focus(page);
+  }
+}
 async function expectLabelInsideArena(page: Page, slot: number) {
   const arena = (await page.locator("#viewport").boundingBox())!;
   const label = (await page.locator(`.player-label.p${slot}`).boundingBox())!;
@@ -81,6 +96,10 @@ test("Rapier Bun/browser parity and usable fixed-aspect scene", async ({
     expect(Math.abs(actual[i]!.vx - expected[i]!.vx)).toBeLessThan(0.0001);
     expect(Math.abs(actual[i]!.vy - expected[i]!.vy)).toBeLessThan(0.0001);
     expect(actual[i]!.grounded).toBe(expected[i]!.grounded);
+    expect(actual[i]!.jetFuelTicksRemaining).toBe(
+      expected[i]!.jetFuelTicksRemaining,
+    );
+    expect(actual[i]!.jetActive).toBe(expected[i]!.jetActive);
     expect(actual[i]!.coyoteTicksRemaining).toBe(
       expected[i]!.coyoteTicksRemaining,
     );
@@ -384,6 +403,287 @@ test("unsolicited room baseline clears held keys and Space cannot cause repeated
       0,
     );
     await page.keyboard.up("Space");
+  } finally {
+    await otherContext.close();
+  }
+});
+
+test("a delayed reset baseline uses server timestamps instead of biasing the input clock", async ({
+  page,
+}) => {
+  let armed = false;
+  let due = 0;
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  await page.routeWebSocket("**/ws", (socket) => {
+    const server = socket.connectToServer();
+    server.onMessage((raw) => {
+      const message = JSON.parse(String(raw));
+      const delay = armed && message.type === "baseline" ? 150 : 0;
+      if (delay) armed = false;
+      due = Math.max(due, Date.now() + delay);
+      const timer = setTimeout(
+        () => {
+          timers.delete(timer);
+          socket.send(raw);
+        },
+        Math.max(0, due - Date.now()),
+      );
+      timers.add(timer);
+    });
+  });
+  try {
+    await join(page);
+    await page.locator("#latency").selectOption("routine");
+    await focus(page);
+    const epoch = (await diagnostics(page)).inputEpoch;
+    armed = true;
+    await page.evaluate(() =>
+      (document.getElementById("reset") as HTMLButtonElement).click(),
+    );
+    await expect
+      .poll(async () => (await diagnostics(page)).inputEpoch)
+      .toBeGreaterThan(epoch);
+    const baselines = await page.evaluate(() =>
+      window.__derp.timingRecords().filter((r) => r.stage === "baseline"),
+    );
+    const baseline = baselines.at(-1)!;
+    expect(
+      Number(baseline.estimatedTick) - Number(baseline.tick),
+    ).toBeGreaterThan(9);
+    for (let n = 0; n < 12; n++) {
+      const key = n % 2 ? "KeyA" : "KeyD";
+      await page.keyboard.down(key);
+      await page.waitForTimeout(500);
+      await page.keyboard.up(key);
+    }
+    expect((await diagnostics(page)).corrections.p95).toBeLessThan(0.08);
+    expect((await diagnostics(page)).status).toContain("movement active");
+  } finally {
+    for (const timer of timers) clearTimeout(timer);
+  }
+});
+
+test("short browser timer stalls add a bounded measured scheduling allowance", async ({
+  page,
+}) => {
+  await join(page);
+  await page.locator("#latency").selectOption("routine");
+  await focus(page);
+  const before = await diagnostics(page);
+  await page.keyboard.down("KeyD");
+  await page.evaluate(async () => {
+    for (let n = 0; n < 8; n++) {
+      await new Promise((resolve) => setTimeout(resolve, 230));
+      const end = performance.now() + 70;
+      while (performance.now() < end) {
+        /* deliberate short main-thread stall */
+      }
+    }
+  });
+  await page.waitForTimeout(30);
+  await page.keyboard.up("KeyD");
+  const after = await diagnostics(page);
+  expect(after.schedulingJitterMs).toBeGreaterThan(20);
+  expect(after.lead).toBeGreaterThanOrEqual(before.lead);
+  expect(after.lead).toBeLessThanOrEqual(12);
+  expect(after.pendingInputs).toBeLessThanOrEqual(120);
+  expect(after.status).toContain("movement active");
+});
+
+test("jet traces match Bun including every fuel tick and collision; roof labels remain inside", async ({
+  page,
+}) => {
+  await page.goto("/?test=1");
+  await page.waitForFunction(() => !!window.__derp);
+  await initializePhysics();
+  for (const [name, trace] of Object.entries(jetTraces())) {
+    const expected = replay(trace),
+      actual = await page.evaluate(
+        (trace) => window.__derp.fixture(trace),
+        trace,
+      );
+    expect(actual.length).toBe(expected.length);
+    for (let i = 0; i < expected.length; i++) {
+      for (const key of ["x", "y", "vx", "vy"] as const)
+        expect(
+          Math.abs(actual[i]![key] - expected[i]![key]),
+          `${name}/${i}/${key}`,
+        ).toBeLessThan(0.0001);
+      for (const key of [
+        "grounded",
+        "coyoteTicksRemaining",
+        "jumpBufferTicksRemaining",
+        "jetFuelTicksRemaining",
+        "jetActive",
+      ] as const)
+        expect(actual[i]![key], `${name}/${i}/${key}`).toBe(expected[i]![key]);
+    }
+  }
+  await join(page);
+  await focus(page);
+  await setJets(page, true);
+  // Move away from the ceiling fixture before the combined launch.
+  await page.keyboard.down("KeyA");
+  await page.waitForTimeout(600);
+  await page.keyboard.up("KeyA");
+  await expect
+    .poll(async () => (await diagnostics(page)).predicted!.grounded)
+    .toBe(true);
+  await page.keyboard.down("Space");
+  await page.keyboard.down("ShiftLeft");
+  const sampled = await page.evaluate(
+    () =>
+      new Promise<{ peak: number; clipped: boolean }>((resolve) => {
+        const end = performance.now() + 1500;
+        let peak = 0,
+          clipped = false;
+        function sample() {
+          peak = Math.max(peak, window.__derp.diagnostics().predicted!.y);
+          const arena = document
+            .getElementById("viewport")!
+            .getBoundingClientRect();
+          const label = document
+            .querySelector(".player-label.p1")!
+            .getBoundingClientRect();
+          clipped ||=
+            label.top < arena.top ||
+            label.bottom > arena.bottom ||
+            label.left < arena.left ||
+            label.right > arena.right;
+          if (performance.now() < end) requestAnimationFrame(sample);
+          else resolve({ peak, clipped });
+        }
+        requestAnimationFrame(sample);
+      }),
+  );
+  await page.keyboard.up("Space");
+  await page.keyboard.up("ShiftLeft");
+  expect(sampled.peak).toBeGreaterThan(12.08);
+  expect(sampled.clipped).toBe(false);
+  await setJets(page, false);
+});
+
+test("two players confirm jet mode; predicted fuel responds under latency and suspend clears Shift", async ({
+  page,
+  browser,
+}) => {
+  await join(page);
+  await focus(page);
+  const otherContext = await browser.newContext();
+  const other = await otherContext.newPage();
+  try {
+    await join(other);
+    await focus(other);
+    await setJets(page, false);
+    expect((await diagnostics(page)).rules.jetsEnabled).toBe(false);
+    const otherEpoch = (await diagnostics(other)).inputEpoch;
+    await page.locator("#jets").click();
+    await expect
+      .poll(async () => (await diagnostics(page)).rules.jetsEnabled)
+      .toBe(true);
+    await expect
+      .poll(async () => (await diagnostics(other)).rules.jetsEnabled)
+      .toBe(true);
+    expect((await diagnostics(other)).inputEpoch).toBeGreaterThan(otherEpoch);
+    for (const preset of ["routine", "degraded", "local"]) {
+      await page.locator("#latency").selectOption(preset);
+      await focus(page);
+      await expect
+        .poll(
+          async () =>
+            (await diagnostics(page)).predicted!.jetFuelTicksRemaining,
+        )
+        .toBe(45);
+      const before = await diagnostics(page);
+      await page.keyboard.down("ShiftLeft");
+      const observation = await page.waitForFunction(() => {
+        const d = window.__derp.diagnostics();
+        return d.predicted?.jetActive ? d : false;
+      });
+      const after = (await observation.jsonValue()) as Diagnostic;
+      expect(after.predicted!.jetFuelTicksRemaining).toBeLessThan(45);
+      if (preset !== "local")
+        expect(after.authoritative!.jetFuelTicksRemaining).toBe(
+          before.authoritative!.jetFuelTicksRemaining,
+        );
+      await expect(other.locator(".player-label.p1")).toContainText("JET");
+      await page.keyboard.down("ShiftRight");
+      await page.keyboard.up("ShiftLeft");
+      await expect
+        .poll(
+          async () =>
+            (await diagnostics(page)).predicted!.jetFuelTicksRemaining,
+        )
+        .toBe(0);
+      await expect
+        .poll(async () => (await diagnostics(page)).predicted!.grounded)
+        .toBe(true);
+      await page.waitForTimeout(200);
+      expect((await diagnostics(page)).predicted!.jetFuelTicksRemaining).toBe(
+        0,
+      );
+      await page.keyboard.up("ShiftRight");
+      await expect
+        .poll(
+          async () =>
+            (await diagnostics(page)).predicted!.jetFuelTicksRemaining,
+        )
+        .toBe(45);
+    }
+    await page.keyboard.down("ShiftLeft");
+    await expect
+      .poll(async () => (await diagnostics(page)).predicted!.jetActive)
+      .toBe(true);
+    await page.locator("#debug").focus();
+    await expect
+      .poll(async () => (await diagnostics(page)).authoritative!.jetActive)
+      .toBe(false);
+    expect((await diagnostics(page)).pendingInputs).toBe(0);
+    await page.keyboard.up("ShiftLeft");
+    await focus(page);
+    const epoch = (await diagnostics(page)).inputEpoch;
+    await page.keyboard.down("ShiftRight");
+    await page.evaluate(() => window.__derp.stall());
+    await expect
+      .poll(async () => (await diagnostics(page)).inputEpoch)
+      .toBeGreaterThan(epoch);
+    expect((await diagnostics(page)).predicted!.jetActive).toBe(false);
+    await page.keyboard.up("ShiftRight");
+    await page.locator("#reset").click();
+    await focus(page);
+    expect((await diagnostics(page)).rules.jetsEnabled).toBe(true);
+    await expect
+      .poll(
+        async () => (await diagnostics(page)).predicted!.jetFuelTicksRemaining,
+      )
+      .toBe(45);
+    const trace = await page.evaluate(() => window.__derp.trace());
+    expect(parseTrace(trace).rules.jetsEnabled).toBe(true);
+    expect(
+      parseTrace(trace).inputs.every((i) => typeof i.jetHeld === "boolean"),
+    ).toBe(true);
+    const previousId = (await diagnostics(page)).playerId;
+    await page.reload();
+    await page.locator("#connect").click();
+    await focus(page);
+    expect((await diagnostics(page)).playerId).not.toBe(previousId);
+    expect((await diagnostics(page)).rules.jetsEnabled).toBe(true);
+    expect((await diagnostics(page)).predicted!.jetFuelTicksRemaining).toBe(45);
+    await expect(page.locator("#jets")).toBeEnabled();
+    await page.locator("#jets").focus();
+    await page.keyboard.press("Enter");
+    await expect
+      .poll(async () => (await diagnostics(other)).rules.jetsEnabled)
+      .toBe(false);
+    await expect(page.locator("#fuel-label")).toHaveText("Jets off");
+    await expect(page.locator("#jets")).toBeEnabled();
+    await page.locator("#latency").focus();
+    await page.keyboard.press("Shift+Tab");
+    // WebKit's native tab order can skip buttons and return to the explicit
+    // arena tab stop. Either way Shift must not swallow backward navigation.
+    expect(["jets", "viewport"]).toContain(
+      await page.evaluate(() => document.activeElement?.id),
+    );
   } finally {
     await otherContext.close();
   }

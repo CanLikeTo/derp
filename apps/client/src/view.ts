@@ -98,9 +98,9 @@ export class View {
       }
       mesh.position.set(player.x, player.y, 0.4);
       const label = this.labels.get(player.id)!;
-      label.textContent = `P${player.slot}${player.id === localId ? " · LOCAL" : ""}`;
-      label.style.left = `clamp(42px, ${((player.x + 12) / 24) * 100}%, calc(100% - 42px))`;
-      label.style.top = `${(1 - (player.y + 1.4) / 13.5) * 100}%`;
+      label.textContent = `P${player.slot}${player.id === localId ? " · LOCAL" : ""}${player.jetActive ? " · JET" : ""}`;
+      label.style.left = `clamp(70px, ${((player.x + 12) / 24) * 100}%, calc(100% - 70px))`;
+      label.style.top = `clamp(28px, ${(1 - (player.y + 1.4) / 13.5) * 100}%, calc(100% - 4px))`;
     }
     this.ghost.visible = debug && !!authoritative;
     this.outlines.visible = debug;

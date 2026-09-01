@@ -96,6 +96,7 @@ test("live reset replaces epochs, stale input ignored, flood rejected", async ()
   expect(reset.inputEpoch).not.toBe(baseline.inputEpoch);
   a.socket.send(
     JSON.stringify({
+      jetHeld: false,
       type: "input",
       inputEpoch: baseline.inputEpoch,
       tick: reset.tick + 16,
@@ -123,6 +124,7 @@ test("far-future and oversized traffic cannot retain a seat", async () => {
   if (baseline?.type !== "baseline") throw new Error("No baseline");
   future.socket.send(
     JSON.stringify({
+      jetHeld: false,
       type: "input",
       inputEpoch: baseline.inputEpoch,
       tick: baseline.tick + 100,
@@ -191,6 +193,7 @@ test("old protocol/content versions are explicitly rejected", async () => {
   await delay(50);
   for (const hello of [
     { type: "hello", protocol: 1, content: CONTENT_VERSION },
+    { type: "hello", protocol: 3, content: "playground-2" },
     { type: "hello", protocol: PROTOCOL_VERSION, content: "playground-1" },
   ]) {
     const client = await connect(hello);
@@ -231,6 +234,75 @@ test("global overrun baselines clear both buffered intentions before either send
     }
     if (baselines[0]?.type === "baseline" && baselines[1]?.type === "baseline")
       expect(baselines[0].players).toEqual(baselines[1].players);
+  } finally {
+    a.socket.close();
+    b.socket.close();
+  }
+});
+
+test("jet mode is authoritative, no-op and obsolete requests do not reset, and controls share a throttle", async () => {
+  await delay(50);
+  const a = await connect(),
+    b = await connect();
+  try {
+    const initial = a.messages[0];
+    if (initial?.type !== "baseline") throw new Error("No baseline");
+    expect(initial.rules.jetsEnabled).toBe(false);
+    const send = (
+      type: "setJets" | "reset",
+      epoch: number,
+      enabled?: boolean,
+    ) =>
+      a.socket.send(
+        JSON.stringify(
+          type === "reset"
+            ? { type, inputEpoch: epoch }
+            : { type, inputEpoch: epoch, enabled },
+        ),
+      );
+    send("setJets", initial.inputEpoch, false);
+    send("setJets", initial.inputEpoch, true);
+    await delay(60);
+    const first = a.messages.filter((m) => m.type === "baseline").at(-1)!;
+    if (first.type !== "baseline") throw new Error("No mode baseline");
+    expect(first.rules.jetsEnabled).toBe(true);
+    expect(
+      b.messages.filter((m) => m.type === "baseline").at(-1)!,
+    ).toMatchObject({ rules: { jetsEnabled: true } });
+    expect(
+      first.players.every(
+        (p) =>
+          p.jetFuelTicksRemaining === 45 &&
+          !p.jetActive &&
+          p.jumpBufferTicksRemaining === 0,
+      ),
+    ).toBe(true);
+    expect(first.inputEpoch).toBeGreaterThan(initial.inputEpoch);
+    send("setJets", initial.inputEpoch, false);
+    send("setJets", first.inputEpoch, false);
+    send("reset", first.inputEpoch);
+    await delay(60);
+    expect(a.messages.filter((m) => m.type === "baseline").at(-1)).toBe(first);
+    await delay(1000);
+    send("setJets", first.inputEpoch, true);
+    send("reset", first.inputEpoch);
+    await delay(60);
+    const reset = a.messages.filter((m) => m.type === "baseline").at(-1)!;
+    if (reset.type !== "baseline") throw new Error("No reset baseline");
+    expect(reset.reason).toBe("room reset");
+    expect(reset.rules.jetsEnabled).toBe(true);
+    b.socket.close();
+    await delay(50);
+    const replacement = await connect();
+    expect(replacement.messages[0]).toMatchObject({
+      rules: { jetsEnabled: true },
+    });
+    replacement.socket.close();
+    const port = running.server.port!;
+    running.stop();
+    await delay(50);
+    running = await startServer(port);
+    expect(running.room.rules.jetsEnabled).toBe(false);
   } finally {
     a.socket.close();
     b.socket.close();

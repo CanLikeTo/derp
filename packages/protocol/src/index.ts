@@ -1,13 +1,15 @@
 import {
   CONTENT_VERSION,
   MOVEMENT,
+  JETS,
+  type RoomRules,
   TRACE_VERSION,
   type Trace,
   type PlayerState,
 } from "@derp/simulation";
 export { CONTENT_VERSION };
-export const PROTOCOL_VERSION = 2;
-export const BUILD_ID = "playground-jump-forgiveness-v1";
+export const PROTOCOL_VERSION = 4;
+export const BUILD_ID = "playground-jets-v2";
 export const LIMITS = {
   messageBytes: 2048,
   futureTicks: 16,
@@ -23,8 +25,10 @@ export type InputFrame = {
   tick: number;
   moveX: -1 | 0 | 1;
   jumpPressed: boolean;
+  jetHeld: boolean;
 };
 export type ClientMessage =
+  | { type: "setJets"; inputEpoch: number; enabled: boolean }
   | InputFrame
   | { type: "hello"; protocol: number; content: string }
   | { type: "ping"; nonce: number }
@@ -41,6 +45,29 @@ export type ServerStats = {
   inBytes: number;
   outBytes: number;
 };
+export type InputReceipt = {
+  inputEpoch: number;
+  tick: number;
+  receivedTick: number;
+  receivedAt: number;
+  outcome: "accepted" | "late" | "duplicate";
+};
+export type InputTiming = {
+  accepted: number;
+  late: number;
+  duplicate: number;
+  missing: number;
+  queued: number;
+  receipts: InputReceipt[];
+};
+export const emptyInputTiming = (): InputTiming => ({
+  accepted: 0,
+  late: 0,
+  duplicate: 0,
+  missing: 0,
+  queued: 0,
+  receipts: [],
+});
 export type StateMessage = {
   type: "baseline" | "snapshot";
   tick: number;
@@ -48,7 +75,9 @@ export type StateMessage = {
   playerId: string;
   inputEpoch: number;
   players: PlayerState[];
+  rules: RoomRules;
   stats: ServerStats;
+  inputTiming: InputTiming;
   reason: string;
 };
 export type ServerMessage =
@@ -90,13 +119,29 @@ export function parseClient(raw: string): ClientMessage {
       break;
     case "input":
       if (
-        keys(value, ["type", "inputEpoch", "tick", "moveX", "jumpPressed"]) &&
+        keys(value, [
+          "type",
+          "inputEpoch",
+          "tick",
+          "moveX",
+          "jumpPressed",
+          "jetHeld",
+        ]) &&
         integer(value.inputEpoch) &&
         integer(value.tick) &&
         [-1, 0, 1].includes(value.moveX as number) &&
-        typeof value.jumpPressed === "boolean"
+        typeof value.jumpPressed === "boolean" &&
+        typeof value.jetHeld === "boolean"
       )
         return value as InputFrame;
+      break;
+    case "setJets":
+      if (
+        keys(value, ["type", "inputEpoch", "enabled"]) &&
+        integer(value.inputEpoch) &&
+        typeof value.enabled === "boolean"
+      )
+        return value as ClientMessage;
       break;
     case "ping":
       if (keys(value, ["type", "nonce"]) && integer(value.nonce))
@@ -124,6 +169,8 @@ export function validPlayer(value: unknown): value is PlayerState {
       "grounded",
       "coyoteTicksRemaining",
       "jumpBufferTicksRemaining",
+      "jetFuelTicksRemaining",
+      "jetActive",
     ]) &&
     text(value.id) &&
     [1, 2].includes(value.slot as number) &&
@@ -132,7 +179,51 @@ export function validPlayer(value: unknown): value is PlayerState {
     integer(value.coyoteTicksRemaining) &&
     value.coyoteTicksRemaining <= MOVEMENT.coyoteTicks &&
     integer(value.jumpBufferTicksRemaining) &&
-    value.jumpBufferTicksRemaining <= MOVEMENT.jumpBufferTicks
+    value.jumpBufferTicksRemaining <= MOVEMENT.jumpBufferTicks &&
+    integer(value.jetFuelTicksRemaining) &&
+    value.jetFuelTicksRemaining <= JETS.fuelTicks &&
+    typeof value.jetActive === "boolean"
+  );
+}
+function validInputTiming(value: unknown): value is InputTiming {
+  return (
+    record(value) &&
+    keys(value, [
+      "accepted",
+      "late",
+      "duplicate",
+      "missing",
+      "queued",
+      "receipts",
+    ]) &&
+    ["accepted", "late", "duplicate", "missing", "queued"].every((key) =>
+      integer(value[key]),
+    ) &&
+    Array.isArray(value.receipts) &&
+    value.receipts.length <= 6 &&
+    value.receipts.every(
+      (r) =>
+        record(r) &&
+        keys(r, [
+          "inputEpoch",
+          "tick",
+          "receivedTick",
+          "receivedAt",
+          "outcome",
+        ]) &&
+        integer(r.inputEpoch) &&
+        integer(r.tick) &&
+        integer(r.receivedTick) &&
+        number(r.receivedAt) &&
+        ["accepted", "late", "duplicate"].includes(r.outcome as string),
+    )
+  );
+}
+export function validRules(value: unknown): value is RoomRules {
+  return (
+    record(value) &&
+    keys(value, ["jetsEnabled"]) &&
+    typeof value.jetsEnabled === "boolean"
   );
 }
 export function parseServer(raw: string): ServerMessage {
@@ -162,7 +253,9 @@ export function parseServer(raw: string): ServerMessage {
       "playerId",
       "inputEpoch",
       "players",
+      "rules",
       "stats",
+      "inputTiming",
       "reason",
     ]) &&
     integer(value.tick) &&
@@ -173,7 +266,9 @@ export function parseServer(raw: string): ServerMessage {
     Array.isArray(value.players) &&
     value.players.length <= 2 &&
     value.players.every(validPlayer) &&
-    record(value.stats)
+    record(value.stats) &&
+    validInputTiming(value.inputTiming) &&
+    validRules(value.rules)
   ) {
     const fields = [
       "tickP95",
@@ -229,18 +324,20 @@ export class Samples {
 export function parseTrace(value: unknown): Trace {
   if (
     !record(value) ||
-    !keys(value, ["version", "contentVersion", "initial", "inputs"]) ||
+    !keys(value, ["version", "contentVersion", "initial", "inputs", "rules"]) ||
     value.version !== TRACE_VERSION ||
     value.contentVersion !== CONTENT_VERSION ||
     !validPlayer(value.initial) ||
+    !validRules(value.rules) ||
     !Array.isArray(value.inputs) ||
     value.inputs.length > 10000 ||
     !value.inputs.every(
       (input) =>
         record(input) &&
-        keys(input, ["moveX", "jumpPressed"]) &&
+        keys(input, ["moveX", "jumpPressed", "jetHeld"]) &&
         [-1, 0, 1].includes(input.moveX as number) &&
-        typeof input.jumpPressed === "boolean",
+        typeof input.jumpPressed === "boolean" &&
+        typeof input.jetHeld === "boolean",
     )
   )
     throw new Error("Invalid or incompatible trace");

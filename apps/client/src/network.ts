@@ -11,6 +11,7 @@ export class DelayQueue {
   constructor(
     public preset: Preset,
     private overflow: () => void,
+    private delayed?: (lateness: number) => void,
   ) {}
   get size() {
     return this.queue.length;
@@ -37,8 +38,11 @@ export class DelayQueue {
       () => {
         this.timer = undefined;
         const now = performance.now();
-        while (this.queue[0] && this.queue[0].due <= now + 0.5)
-          this.queue.shift()!.run();
+        while (this.queue[0] && this.queue[0].due <= now + 0.5) {
+          const entry = this.queue.shift()!;
+          this.delayed?.(Math.max(0, performance.now() - entry.due));
+          entry.run();
+        }
         this.schedule();
       },
       Math.max(0, this.queue[0]!.due - performance.now()),

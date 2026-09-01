@@ -62,7 +62,7 @@ test("short released tap survives until landing; held or repeat Space never chai
     let launches = 0;
     for (let tick = 0; tick < 100; tick++) {
       if (!release) controls.press("Space", true);
-      const next = sim.step(state, controls.sample());
+      const next = sim.step(state, controls.sample(), { jetsEnabled: false });
       if (next.vy > 0 && state.vy <= 0) launches++;
       state = next;
     }
@@ -80,8 +80,9 @@ test("mid-window restoration replaces disturbed collider state and restores both
     expect(
       state.coyoteTicksRemaining + state.jumpBufferTicksRemaining,
     ).toBeGreaterThan(0);
-    sim.step({ ...state, x: -11, y: 10 }, NEUTRAL);
-    for (const input of trace.inputs.slice(2)) state = sim.step(state, input);
+    sim.step({ ...state, x: -11, y: 10 }, NEUTRAL, { jetsEnabled: false });
+    for (const input of trace.inputs.slice(2))
+      state = sim.step(state, input, { jetsEnabled: false });
     expect(state).toEqual(expected.at(-1)!);
     sim.dispose();
   }
@@ -92,10 +93,11 @@ test("a new edge refreshes one buffer slot without queuing multiple landing jump
   let state = jumpTraces().landingExpired!.initial;
   let launches = 0;
   for (let tick = 0; tick < 100; tick++) {
-    const next = sim.step(state, {
-      moveX: 0,
-      jumpPressed: tick === 0 || tick === 4,
-    });
+    const next = sim.step(
+      state,
+      { jetHeld: false, moveX: 0, jumpPressed: tick === 0 || tick === 4 },
+      { jetsEnabled: false },
+    );
     if (tick === 4) expect(next.jumpBufferTicksRemaining).toBe(5);
     if (next.vy > 0 && state.vy <= 0) launches++;
     state = next;

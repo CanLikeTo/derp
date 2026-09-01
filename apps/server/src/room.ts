@@ -2,16 +2,24 @@ import {
   Simulation,
   spawnState,
   NEUTRAL,
+  type RoomRules,
   type PlayerState,
 } from "@derp/simulation";
-import { LIMITS, type InputFrame } from "@derp/protocol";
+import {
+  LIMITS,
+  emptyInputTiming,
+  type InputTiming,
+  type InputFrame,
+} from "@derp/protocol";
 export type Participant = {
   state: PlayerState;
   epoch: number;
   active: boolean;
   inputs: Map<number, InputFrame>;
+  timing: InputTiming;
 };
 export class Room {
+  rules: RoomRules = { jetsEnabled: false };
   tick = 0;
   lateInputs = 0;
   private nextEpoch = 1;
@@ -29,6 +37,7 @@ export class Room {
       epoch: this.nextEpoch++,
       active: false,
       inputs: new Map<number, InputFrame>(),
+      timing: emptyInputTiming(),
     };
     this.participants.set(id, peer);
     return peer;
@@ -41,7 +50,11 @@ export class Room {
     if (!peer) return;
     peer.epoch = this.nextEpoch++;
     peer.inputs.clear();
-    peer.state = { ...peer.state, jumpBufferTicksRemaining: 0 };
+    peer.state = {
+      ...peer.state,
+      jumpBufferTicksRemaining: 0,
+      jetActive: false,
+    };
     peer.active = true;
     return peer;
   }
@@ -50,13 +63,29 @@ export class Room {
     if (peer) {
       peer.active = false;
       peer.inputs.clear();
-      peer.state = { ...peer.state, jumpBufferTicksRemaining: 0 };
+      peer.state = {
+        ...peer.state,
+        jumpBufferTicksRemaining: 0,
+        jetActive: false,
+      };
     }
   }
-  input(id: string, input: InputFrame) {
+  input(id: string, input: InputFrame, receivedAt = performance.now()) {
     const peer = this.participants.get(id);
     if (!peer || input.inputEpoch !== peer.epoch || !peer.active) return;
+    const receipt = (outcome: "accepted" | "late" | "duplicate") => {
+      peer.timing[outcome]++;
+      peer.timing.receipts.push({
+        inputEpoch: input.inputEpoch,
+        tick: input.tick,
+        receivedTick: this.tick,
+        receivedAt,
+        outcome,
+      });
+      if (peer.timing.receipts.length > 6) peer.timing.receipts.shift();
+    };
     if (input.tick <= this.tick) {
+      receipt("late");
       this.lateInputs++;
       return;
     }
@@ -64,13 +93,21 @@ export class Room {
       throw new Error(
         "Input exceeds future window; reconnect for a fresh baseline",
       );
-    if (!peer.inputs.has(input.tick)) peer.inputs.set(input.tick, input);
+    if (!peer.inputs.has(input.tick)) {
+      peer.inputs.set(input.tick, input);
+      receipt("accepted");
+    } else receipt("duplicate");
   }
   step() {
     this.tick++;
     for (const peer of this.participants.values()) {
       const input = peer.active ? peer.inputs.get(this.tick) : undefined;
-      peer.state = this.simulation.step(peer.state, input ?? NEUTRAL);
+      if (peer.active && !input) peer.timing.missing++;
+      peer.state = this.simulation.step(
+        peer.state,
+        input ?? NEUTRAL,
+        this.rules,
+      );
       peer.inputs.delete(this.tick);
     }
   }

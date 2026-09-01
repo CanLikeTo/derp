@@ -1,5 +1,110 @@
 # Playground validation — 31 August 2026
 
+## Jet experiment revision 2: automated acceptance passed
+
+Build `playground-jets-v2` keeps protocol 4, content `playground-3`, trace 3 and all movement/rules unchanged. It adds a bounded measured browser-scheduling allowance to the existing 2–12-tick prediction lead. All 50 Bun tests pass (697 assertions), including delayed-queue instrumentation and repeated-stall retirement. The deterministic repeated-stall control has ten late commands (four after settling); measured scheduling allowance has one (zero after settling). Both have overall p95 zero; this test demonstrates deadline improvement, not a reconstruction of every live failure. Preview and development each pass all 39 Chromium/Firefox/WebKit tests, with no failures, skips or flaky results. Compatibility initialization/restoration, replay and the production build also pass. The existing Rapier bundle-size advisory remains.
+
+Full soak: **20:06:29–20:36:33 UTC, 31 August 2026**, 1,800.91 seconds, **30 resets and 30 rejoins**. Every automated gate passed. Source fingerprint `85d6dc1fac5350f5e12362698a74d66654cc3c3febdd763d08cfc742faf688e8` remained unchanged throughout.
+
+| Measure | Worst sampled post-warm-up value | Gate |
+| --- | --- | --- |
+| Server work p95 / p99 | 1.724 / 2.343 ms | ≤8 / ≤12 ms |
+| Ordinary / thrust / overall correction p95 | 0 / 0 / 0 units | <0.08 units each |
+| Upstream / downstream per player | 5.544 / 31.438 kB/s | ≤8 / ≤64 kB/s |
+| Server RSS median growth | 0.047 MiB | <32 MiB investigation alarm |
+| Prediction / remote history maximum | 23 ticks / 40 snapshots | ≤120 / ≤40 |
+| Incoming / outgoing delayed queue maximum | 5 / 6 messages | ≤256 each |
+| Scene objects / geometries / programs | 14 / 9 / 2 throughout | Stable |
+
+All 360 sampled states contained two players. There were no errors or server overruns. Twenty-four expired commands were discarded; the largest individual correction was 0.407 units. Zero p95 does not mean every correction was zero. The streamed trace includes nine corrections above 0.08 units among 67,997 matched corrections. Observed lead stayed within 8–12 ticks, measured RTT reached 206.3 ms, and the server input queue reached 16 entries. Headless frame p95 reached 17.4 ms; this is not a real-display benchmark.
+
+Retained-memory profiling captured both clients every five minutes, with heap snapshots at minute five and completion. P1 retained JavaScript heap varied from 5,397,300 to 5,537,096 bytes and ended at 5,499,060; it fell again after minute twenty rather than showing continuous growth. P2 varied from 7,231,940 to 7,297,076 bytes. External backing storage remained about 2.68 MB. Each client retained one document and 49 listeners, with 224 / 222 DOM nodes respectively at every sample. All four heap snapshots contained zero detached nodes. Native socket, document and WebGL-context counts stayed at one per client. The small retained-size differences include browser paint/timing metadata, weak lists and text caches; no accumulating gameplay resources were found.
+
+Browser-subtree RSS first/last-third post-warm-up medians were 1,427.18 / 1,427.80 MiB (+0.62 MiB), within a 1,380.33–1,585.75 MiB range. Snapshot profiling itself causes transient memory and timing overhead, retained in these measurements; RSS also counts shared pages. Server RSS stayed 110.250–110.344 MiB during the last ten minutes. These results support this bounded prototype and do not prove every native cache or production workload leak-free.
+
+Evidence: `artifacts/playground-jets-v2-soak-1800s-1788206789803/` contains the report, full timing stream/analysis, heap samples/snapshots/comparison, process observer, environment, both browser matrices, Bun check log and screenshots. Both final screenshots were checked for framing and visible controls/labels. The soak and observer exited normally.
+
+The run used Bun 1.4.0 and two isolated headless Chromium 151.0.7922.34 processes, 1440×1000, DPR cap 1, routine 100 ms added RTT, arm64 macOS 26.6.2 with ten logical CPUs. **The human jet playtest is pending.** Installed Chrome/Firefox/Safari manual checks, simultaneous two-human play, real-display/low-end performance, real-network impairment and remote CI remain unverified. Jets are still a keep/revise/remove experiment, not a production-capacity result.
+
+Revision 1's soak was deliberately stopped after its post-warm-up correction p95 reached 0.133333 units. Six resets and five rejoins completed; no unexpected server crash occurred. The report's server-exited reason reflects the deliberate stop. Evidence is retained in `artifacts/playground-jets-v1-soak-1800s-1788205612516/`, including `STOPPED.md`, minute-five heaps and correlated timing. Actual send delays reached 100–120 ms despite configured 40–60 ms application delay. Most large corrections coincided with late receipts.
+
+An original/guarded/original fuel-display profile did not establish a causal rendering problem: frame p95 was approximately 25 / 17 / 17 ms. The speculative unchanged-value guard was not retained. These headless profiles (`artifacts/jet-ui-*.json`) are not real-display performance measurements. The measured scheduling repair keeps server deadlines and all acceptance thresholds intact.
+
+## Historical jet experiment revision 1: correctness passed, soak failed
+
+Build `playground-jets-v1`, protocol 4, content `playground-3`, trace 3. Jets, fuel, shared rules/toggle, roof, indicators and lifecycle behavior are implemented. Existing movement matched the frozen pre-jet outcomes at all 1,431 fixture ticks (maximum numeric difference zero). Formatting, strict types, package boundaries and all 48 Bun tests pass (686 assertions). Compatibility initialization/restoration and the 900-tick replay pass. Preview and development each pass all 36 Chromium/Firefox/WebKit tests, with zero failures, skips or flaky results. The subsequent jet-enabled soak failed as described above.
+
+The first new browser failures exposed test setup assumptions about persistent room mode and disabled-button cooldown; the harness now establishes its mode. Keyboard testing then exposed a short enabled-state lag during cooldown; the UI now disables controls immediately. Roof sampling runs inside animation frames and confirms actual roof contact. A regression also prevents releasing thrust at a ledge from rearming coyote through the previous ground contact; disabled mode remains unchanged. WebKit testing found that rewriting the pressed button label during focusout cancelled its click. The UI now preserves unchanged label text; an isolated message trace and both full matrices confirm the mode request and baseline. Backward-tab coverage permits the native button/arena tab-order difference between engines while checking that Shift does not consume navigation.
+
+The 60-second jet rehearsal completed one reset/rejoin and heap capture but failed the separate ordinary-correction gate: worst post-warm-up p95 0.133333 units, versus <0.08. Thrust p95 was zero and overall p95 0.001271 units. Early RTT reached 290.7 ms while the separate final check was also running; subsequent samples settled. This is retained as failed evidence, not acceptance. The full run uses the same code and thresholds, the normal five-minute warm-up, and no concurrent validation workloads. Rehearsal evidence: `artifacts/playground-jets-v1-soak-60s-1788205531488/`.
+
+## Timestamp mapping prerequisite: passed
+
+Build `playground-timing-v2`, protocol 3, content `playground-2`, trace 2. The repaired clock ages baselines through ping-derived monotonic offsets. The deterministic delayed-baseline case has zero late commands and correction p95 zero, versus 368 late commands and 0.40 p95 with the old mapping. Baseline delays 0/50/150 ms, frame phases 0/8/16 ms, latency growth and short/long stalls pass. The failing controls remain reproducible.
+
+Formatting, types, package boundaries, 36 Bun tests (467 assertions), compatibility initialization/restoration and the 900-tick replay pass. Preview and development each pass all 30 Chromium/Firefox/WebKit tests, including a live 150 ms delayed reset baseline. CI now runs both modes; remote execution remains unverified.
+
+Full soak: **18:47:46–19:17:50 UTC, 31 August 2026**, 1,800.94 seconds, 30 resets and 30 rejoins. Every automated gate passed. Source fingerprint `bf027ad8aae63e4be8af70ccf8636043f52a8c2ecef6d4afca91ef5cbd95513b` remained unchanged.
+
+| Measure | Worst sampled post-warm-up value |
+| --- | --- |
+| Server work p95 / p99 | 1.777 / 2.403 ms |
+| Correction p95 | **0 units** |
+| Upstream / downstream | 4.608 / 29.074 kB/s per player |
+| Server RSS median growth | 0.078 MiB |
+| Prediction / remote history maximum | 16 ticks / 40 snapshots |
+| Scene objects / geometries / programs | 13 / 8 / 2, stable |
+
+No errors or overruns; 340 expired commands across the entire run, largest individual correction 0.55 units. Zero p95 is not a claim that all individual corrections were zero. The test used two isolated headless Chromium 151.0.7922.34 processes, Bun 1.4.0, 1440×1000, routine 100 ms added RTT, arm64 macOS 26.6.2 with ten logical CPUs. Headless timing is not a real-display benchmark.
+
+Retained-memory investigation used opt-in Chromium garbage collection every five minutes, with heap snapshots at minute five and the end. All profiling-induced timing remained in the measurements. P1 retained JavaScript heap ranged 5,243,312–5,392,708 bytes (146 KiB range); intermediate samples plateaued around 5.30–5.31 MB. P2 ranged 7,165,972–7,220,404 bytes. Array-buffer/external backing storage stayed around 2.68 MB. P1 retained one document, 200 DOM nodes and 48 listeners; P2 one document, 199–205 nodes and 48 listeners. Both snapshots report zero detached nodes. Native socket, document and WebGL-context counts stayed at one. The small object changes include browser performance metadata and wrappers for existing DOM elements; no accumulating gameplay entities were found.
+
+The process observer recorded first/last-third post-warm-up browser RSS medians of 1,400.38 / 1,407.47 MiB (+7.09 MiB), within a 1,358.48–1,559.56 MiB range. Snapshotting itself raised process memory, and RSS sums shared pages. Retained profiles and stable resource counts support proceeding with the bounded prototype; they do not prove all native browser caches or production workloads leak-free. No speculative memory/rendering patch was added.
+
+Evidence: `artifacts/playground-timing-v2-soak-1800s-1788202066771/` contains the full report, timing analysis, heap samples/snapshots/summaries, process observer, environment and browser matrices. `pre-jet-movement.json` freezes the existing fixture and jump outcomes for disabled-mode comparison. The approved jet experiment can now proceed. Installed-browser manual checks, real-display performance and remote CI remain unverified.
+
+## Historical first timing prerequisite: acceptance failed
+
+Build `playground-timing-v1`, protocol 3, content `playground-2`, trace 2. Movement, rendering, dependency versions, server deadlines, prediction retirement, and the 2–12-tick lead bound are unchanged. Lead may now grow using later RTT samples. Per-player input outcomes, bounded timing records, and local analysis commands are added.
+
+The approved plan explicitly gates jets on successful timing acceptance. The new soak exceeded the correction budget at minute 21; **jet simulation, fuel, Shift controls, room rules/toggle, roof, and jet UI have not been implemented**. The full run completed: 1,800.28 seconds, 30 resets and 30 leave/rejoin cycles, with no errors or server overruns. It failed only the correction gate.
+
+Final soak: 17:25:16–17:55:19 UTC on 31 August 2026. Source fingerprint `3521986c094a7f7fd1ccc84bacb8a5ea932024c4c2b8583c967f3229e724089b` stayed unchanged. Two isolated headless Chromium 151.0.7922.34 processes used the routine 100 ms added-RTT preset.
+
+| Measure | Worst sampled post-warm-up result | Gate |
+| --- | --- | --- |
+| Server work p95 / p99 | 1.758 / 2.488 ms | ≤8 / ≤12: pass |
+| Correction p95 | **0.133333 units** | **<0.08: fail** |
+| Upstream / downstream per player | 4.607 / 29.071 kB/s | ≤8 / ≤64: pass |
+| Server RSS median growth | 0.15625 MiB | <32 MiB alarm: pass |
+| Scene objects / geometries / programs | 13 / 8 / 2 throughout | Stable: pass |
+| Maximum prediction / remote history | 15 ticks / 40 snapshots | ≤120 / ≤40: pass |
+| Maximum incoming / outgoing delay queue | 5 / 5 | ≤256 each: pass |
+
+All 360 sampled states contained two players. There were 1,959 expired input commands. The largest individual correction was 0.611237 units; RTT ranged 114.5–221.1 ms. Headless frame p95 reached 18.2 ms, which is not a real-display frame measurement. Final rolling correction p95 returned to zero as the failed epoch aged out; this does not erase the earlier failure.
+
+The separate browser-process observer captured 50 post-warm-up samples. First/last-third RSS medians were 1,239.58 / 1,249.97 MiB, an increase of 10.39 MiB; the range was 1,226.77–1,274.20 MiB. RSS includes shared pages and native allocations, not just retained JavaScript objects. This does not clear the existing browser-memory investigation; retained-heap profiling remains open. The passing automated memory gate measures server RSS only. Server RSS during the last ten minutes was 106.031–106.047 MiB. The observer and soak processes exited normally.
+
+Formatting, strict types, package boundaries and all 34 Bun unit/integration tests passed (237 assertions). Compatibility initialization/restoration and the 900-tick replay passed. Built-preview Playwright passed all 27 Chromium/Firefox/WebKit workflows. Final development Playwright also passed all 27 Chromium/Firefox/WebKit workflows. Both matrices had no skips or flaky results. Reports are copied into the timing soak directory. The build retains the existing Rapier bundle-size advisory.
+
+No new installed-Chrome/Firefox/Safari manual smoke test or real-display measurement was performed. Playwright's browser engines are the automated coverage, not proof of installed-browser or human playtest acceptance. Remote CI remains unverified; its workflow now also writes the deterministic timing evidence.
+
+Deterministic evidence (`bun tools/timing.ts`):
+
+| Scenario | Late commands | Correction p95 | Result |
+| --- | --- | --- | --- |
+| Frozen lead, delay grows from 50 to 100 ms per direction | 798; 691 after settling | 0.4000005 units | Reproduces insufficient lead |
+| Bounded lead updates, same delay increase | 13; zero after settling | 0 | Fixes this case |
+| Bounded lead updates, baseline alone delayed 50 ms | 368; 158 after settling | 0.4000000 units | **Unresolved clock-mapping failure** |
+
+These use the real shared simulation, room and prediction under a virtual monotonic clock. They vary phase, seeded jitter, latency growth, and 40/180/1,000-ms stalls. The known-failure unit assertion is deliberately labelled “unresolved reproduction”; a passing test confirms reproducibility, not acceptance.
+
+Live evidence identifies P1 epoch 163 around 1,225–1,280 seconds. Its 3,589 correlated inputs include 939 late commands; 272 of 1,198 corrections exceed 0.08 units. Adjacent P1 epochs 155 and 171 each had zero observed late commands. Their outgoing delay p95 values are similar (74.4 / 73.6 / 73.6 ms), but the middle epoch has an inferred mapping residual of +2.95 ticks, compared with approximately zero in its neighbours. P2 was unaffected during that interval.
+
+The residual is `receivedTick - estimatedServerTickAtGeneration - browserQueueDelay/TICK_MS`. It includes loopback transport, dispatch and tick quantization; it is not a direct measurement of clock offset. No browser/server clock origins are subtracted. This narrows the failure to an epoch-specific timing problem and is consistent with the deterministic delayed-baseline reproduction, but does not reconstruct the exact delivery delay of that live baseline.
+
+Local case evidence: `artifacts/playground-timing-v1-soak-1800s-1788197116489/clock-bias-case.json`, `timing.jsonl`, and `timing-analysis.json`. Deterministic reports: `artifacts/timing-1788198486616/`. Receipt tails may omit burst traffic; captured timing logs are bounded observations rather than a lossless transport trace. Keep original failed-run evidence below for comparison.
+
 ## Jump-forgiveness build: playtest passed, performance acceptance open
 
 Build `playground-jump-forgiveness-v1`, protocol 2, content `playground-2`, trace 2. Dependencies are unchanged.
@@ -35,7 +140,7 @@ Run: 14:22:20–14:52:24 UTC on 31 August 2026. Duration: 1,800.24 seconds. Thir
 
 The failed rolling correction samples were concentrated around 510–710 seconds in P1. Late-input counts rose quickly during that interval; 2,101 late inputs were retired over the run. The largest individual correction was 0.611238 units. Sampled RTT ranged from 107.6–186.2 ms (including the 100 ms added-RTT preset). Headless frame p95 peaked at 17.7 ms; these are not real-display measurements. The first interrupted rehearsal had larger RTT spikes, up to 309.6 ms.
 
-The client currently fixes its tick mapping and prediction lead on each baseline; subsequent pings update RTT diagnostics but do not continuously correct that mapping. The late-input burst is consistent with insufficient prediction lead or baseline timing error, but these measurements do not conclusively isolate its cause or establish whether it predates this change. The short unchanged-code control had a narrower RTT range and cannot settle that question. A focused timing investigation is the next acceptance action; do not relax the budget or reinstate the reverted rendering patch to claim success.
+In that build, the client fixed its tick mapping and prediction lead on each baseline; subsequent pings updated RTT diagnostics but did not adjust the mapping or lead. The late-input burst is consistent with insufficient prediction lead or baseline timing error, but these measurements do not conclusively isolate its cause or establish whether it predates this change. The short unchanged-code control had a narrower RTT range and cannot settle that question. A focused timing investigation is the next acceptance action; do not relax the budget or reinstate the reverted rendering patch to claim success.
 
 Server RSS was 111.266–111.281 MiB during the final ten minutes. The separate read-only browser-process observer collected 72 post-warm-up samples: first/last-third RSS medians were 1,185.69 / 1,212.91 MiB, a 27.22 MiB increase. Its late-window median was 1,213.26 MiB with substantial fluctuation and page/process replacement. RSS may double-count shared pages and is not retained JavaScript heap size. These observations do **not** establish the stronger claim of no continuing browser-memory growth; heap profiling remains needed if the trend reproduces. The harness's memory gate measures server RSS only.
 

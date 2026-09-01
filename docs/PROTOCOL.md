@@ -9,24 +9,24 @@ For later releases, change the protocol version when message semantics become in
 The browser sends a hello after the WebSocket opens:
 
 ```json
-{"type":"hello","protocol":2,"content":"playground-2"}
+{"type":"hello","protocol":4,"content":"playground-3"}
 ```
 
 Only the server chooses the player UUID and slot. A compatible hello either receives a `baseline`, or a `rejected` message followed by closure. There are two player seats and eight total pending/live socket slots. Sending input before admission is invalid.
 
-A baseline contains `tick`, `serverTime`, `playerId`, `inputEpoch`, complete `players`, diagnostic `stats`, and a human-readable `reason`. Each player contains `id`, `slot`, `x`, `y`, `vx`, `vy`, `grounded`, `coyoteTicksRemaining`, and `jumpBufferTicksRemaining`. Times use the server's monotonic clock; browser and server clock origins must not be compared directly.
+A baseline contains `tick`, `serverTime`, `playerId`, `inputEpoch`, complete `players`, `rules`, recipient `inputTiming`, diagnostic `stats`, and a human-readable `reason`. Each player contains `id`, `slot`, `x`, `y`, `vx`, `vy`, `grounded`, `coyoteTicksRemaining`, `jumpBufferTicksRemaining`, `jetFuelTicksRemaining`, and `jetActive`. Room rules accompany every state message. Times use the server's monotonic clock; browser and server clock origins must not be compared directly.
 
 Before enabling movement, the client measures three round trips, then requests a fresh baseline. Changing latency during admission restarts the connection if a first baseline has not arrived. This prevents clearing a delayed hello without replacing it.
 
 ## Input and finalized time
 
 ```json
-{"type":"input","inputEpoch":7,"tick":121,"moveX":1,"jumpPressed":false}
+{"type":"input","inputEpoch":7,"tick":121,"moveX":1,"jumpPressed":false,"jetHeld":false}
 ```
 
 An input is one tick of intent. `moveX` is exactly -1, 0 or 1. The jump flag is a press edge, not a held button. Clients cannot send elapsed time, positions, velocities, or a target player. Unknown fields are rejected.
 
-For current server tick T, only ticks T+1 through T+16 are accepted. The first valid input for a player's tick wins. Duplicates, expired inputs and old epochs cannot change already simulated time. Missing input at a tick means zero horizontal intent and no new jump press; gravity, collision and already-authoritative jump timers still run. Input arrival never advances the room clock.
+For current server tick T, only ticks T+1 through T+16 are accepted. The first valid input for a player's tick wins. Duplicates, expired inputs and old epochs cannot change already simulated time. Missing input at a tick means zero horizontal intent, no new jump press and neutral jet intent; gravity, collision and already-authoritative jump timers still run. A grounded neutral tick can recharge fuel. Input arrival never advances the room clock.
 
 A snapshot for T describes state **after** that tick. It finalizes every input through T, whether delivered, dropped, absent or late. For example, after snapshot 120, the client deletes pending inputs 118, 119 and 120, restores state 120, and replays only 121 onward. A missing jump at 119 cannot execute later. A timely press may already be represented by a positive authoritative jump-buffer counter at T: retiring its command must preserve that state and allow it to trigger on a subsequent landing.
 
@@ -68,3 +68,33 @@ Restoration and replay include both counters. Suspend and every new baseline cle
 The client clears controls on every baseline. Suspend/resync discard pending prediction and visual offsets, restore the latest authoritative pose, and clear buffered intent only in that local copy. While paused, authoritative snapshots advance with no pending replay; prediction resumes only after a fresh baseline. The stored authoritative snapshot remains unchanged.
 
 Diagnostic envelopes stay version 1; embedded traces are version 2 with content `playground-2` and complete initial state. `bun run replay export.json` validates the trace strictly. Old version-1 traces are explicitly incompatible. Diagnostics expose the configured windows and both live counters. No rendering interpolation changes accompany this slice.
+
+## Timing prerequisite (protocol 3 / playground-2)
+
+Build `playground-timing-v1` keeps movement and trace version 2 unchanged. Baselines and snapshots now require recipient-specific `inputTiming`: accepted, late, duplicate, missing, queued counters and at most six recent input receipts. Each receipt has the input epoch/target tick, server receipt tick/time and accepted/late/duplicate outcome. Counters last for that anonymous participant's connection; existing aggregate server counters remain distinct. A missing command is counted on each active neutral server tick, including the neutral interval seeded after a baseline. Suspension and obsolete epochs are ignored before receipt counters.
+
+The initial lead remains `clamp(ceil((RTT/2 + preset jitter)/tick duration)+2, 2, 12)`. Later pong samples can increase it using the same formula and the maximum of the last three RTT samples. Lead never shrinks within an epoch; a new baseline recalculates it. This avoids deliberately pausing the input timeline to drain a reduced lead. The server step rate, input deadline/window, retirement, and movement/rendering behavior are unchanged. A sudden latency increase may still expire commands before the next ping arrives; no old intent is replayed on the server.
+
+Local diagnostic exports add a bounded 2,400-record timing log (generation, actual send, server receipts, tick-matched corrections, ping clock observations and baselines). Records have monotonic local sequence numbers. Correlate by player identity, input epoch and target tick. Browser `at` and server `receivedAt` have different clock origins: never subtract them. Receipt records may repeat across snapshots. The soak writes these records incrementally to `timing.jsonl`, separate from its small sampled summary; each replaced browser page starts a new record sequence.
+
+`bun tools/timing.ts` reproduces a seeded virtual-clock regression with the real room and prediction. Its frozen control retains the previous baseline-only lead. A 50-to-100-ms per-direction delay increase after calibration demonstrates persistent expired input; updating lead removes that persistent failure. Tests also vary frame phase and exercise 40/180/1,000-ms stalls. This identifies a concrete defect, but does not by itself establish the cause of the earlier uninstrumented soak.
+
+The command also emits `biased-baseline.json`, a regression control with the old clock mapping, and `mapped-baseline.json`, the repaired mapping under the same 50 ms baseline-only delay. The old control retains its known failure; the mapped case must have zero late commands after settling and correction p95 below 0.08. Unit coverage also varies baseline delay (0/50/150 ms) and frame phase.
+
+`ServerClock` maps monotonic clocks from ping midpoints. Among eight recent observations, the lowest-RTT sample determines the target offset. A baseline's age is `max(0, browserNow + estimatedOffset - baseline.serverTime)`, rather than a presumed half RTT. The tick estimate is anchored to that baseline's tick and timestamp. Offset corrections between baselines slew at 90–110% speed; no backward steps or frozen input time. A new baseline resets the tick anchor (required after server overruns). Disconnect or a changed latency preset clears clock samples. Ping asymmetry and tick phase still limit estimation accuracy; server authority and deadlines remain unchanged.
+
+## Fuel-limited jet experiment (protocol 4 / content playground-3 / trace 3)
+
+The current hello requires protocol **4** and content **`playground-3`**. Old clients must reload; old traces are rejected. Input frames additionally require `jetHeld: boolean`. State snapshots require `rules: { jetsEnabled: boolean }`, and every player has integer `jetFuelTicksRemaining` in 0–45 and boolean `jetActive`. Traces carry the same explicit rules and complete inputs/state.
+
+Either Shift key holds thrust. Both must be released to refill on the ground. There are 45 fuel ticks; an active tick consumes one, applies upward acceleration 45 alongside gravity 30, and caps upward velocity at 12. Releasing removes acceleration, not existing momentum. Grounded released ticks refill one, capped at 45. Holding an exhausted jet never refills or relaunches. Players spawn with full fuel. `jetActive` records thrust applied on the completed tick, including the final fuel-consuming tick with fuel zero.
+
+Existing jump/buffer eligibility runs first, then thrust; a valid simultaneous jump uses jump velocity before gravity and thrust. The two collision sweeps remain unchanged. Thrust clears coyote and does not arm walk-off coyote or consume an unfulfilled landing buffer. A buffered landing jump still starts vertical displacement next tick and does not refill on its landing tick. Ceiling-blocked thrust consumes fuel. Disabled mode ignores jet input, keeps fuel full and preserves ordinary movement.
+
+`{"type":"setJets","inputEpoch":7,"enabled":true}` is an admitted player's room-wide control. Obsolete epochs are ignored. Same-value requests are no-ops before the shared one-second Reset/mode-change throttle. A changed mode resets both players, prepares both epochs, then sends both baselines without advancing simulation time. Reset preserves mode, as do departure/rejoin; server startup disables it. Clients adopt rules from baselines and request resync on an incompatible snapshot. No optimistic room-mode switch is applied.
+
+Suspend/resync preserve fuel and momentum but clear held input, pending replay and activity. Later neutral simulation ticks may legitimately refill a grounded player; creating a baseline itself never grants fuel. Duplicates and expired input never add simulation time. Reconnection creates a fresh full-fuel spawn.
+
+A shared solid roof at `(0,13.25)`, size `24×0.5`, contains both modes. Labels clamp inside the view. The local fuel meter uses prediction; remote `JET` text uses the same historical interpolation interval as its pose. Diagnostics export rules, jet configuration, fuel/activity and separate ordinary/thrust correction summaries. No particles, audio or additional player meshes are created.
+
+Build `playground-jets-v2` additionally measures browser timer lateness on both delayed queues. The largest of the last 120 samples, each clamped to 0–250 ms, is added to preset jitter in the lead formula. Diagnostics expose `schedulingJitterMs`; generation records include it, and `scheduling` records explain resulting lead increases. Samples clear on disconnect or preset changes. The live lead still never shrinks and remains 2–12 ticks. This changes only the client's estimate of required deadline margin, not the wire protocol, authority, simulation delta-time or server future window. `bun tools/timing.ts` saves fixed/measured repeated-stall controls alongside the earlier regressions.

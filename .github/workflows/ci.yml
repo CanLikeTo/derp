@@ -16,9 +16,11 @@ jobs:
           node-version: "24"
       - run: bun install --frozen-lockfile
       - run: bun run check
+      - run: bun tools/timing.ts
       - run: bun run build
       - run: bunx playwright install --with-deps chromium firefox webkit
       - run: bun run test:e2e
+      - run: DERP_MODE=dev bun run test:e2e
       - uses: actions/upload-artifact@v4
         if: always()
         with:

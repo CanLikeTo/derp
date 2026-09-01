@@ -7,6 +7,7 @@ import {
   PROTOCOL_VERSION,
   validPlayer,
   parseTrace,
+  emptyInputTiming,
 } from "@derp/protocol";
 import { Outbox } from "../../apps/server/src/server";
 test("runtime validation rejects extra authority, wrong types, and bounds", () => {
@@ -20,6 +21,7 @@ test("runtime validation rejects extra authority, wrong types, and bounds", () =
     ).type,
   ).toBe("hello");
   const input = {
+    jetHeld: false,
     type: "input",
     inputEpoch: 1,
     tick: 1,
@@ -38,6 +40,52 @@ test("runtime validation rejects extra authority, wrong types, and bounds", () =
   expect(() => parseClient(" ".repeat(2049))).toThrow();
   expect(() => parseClient("{")).toThrow();
   expect(() => parseServer('{"type":"snapshot"}')).toThrow();
+});
+
+test("recipient timing payloads require bounded, typed receipts", () => {
+  const baseline = {
+    rules: { jetsEnabled: false },
+    type: "baseline" as const,
+    tick: 0,
+    serverTime: 0,
+    playerId: "fixture",
+    inputEpoch: 1,
+    players: [fixtureTrace().initial],
+    reason: "test",
+    inputTiming: emptyInputTiming(),
+    stats: {
+      tickP95: 0,
+      tickP99: 0,
+      scheduleMs: 0,
+      overruns: 0,
+      lateInputs: 0,
+      connections: 1,
+      queuedInputs: 0,
+      rssMB: 0,
+      inBytes: 0,
+      outBytes: 0,
+    },
+  };
+  expect(parseServer(JSON.stringify(baseline))).toEqual(baseline);
+  const receipt = {
+    inputEpoch: 1,
+    tick: 10,
+    receivedTick: 9,
+    receivedAt: 123,
+    outcome: "accepted",
+  };
+  for (const invalid of [
+    undefined,
+    { ...emptyInputTiming(), late: -1 },
+    { ...emptyInputTiming(), accepted: 0.5 },
+    { ...emptyInputTiming(), receipts: Array(7).fill(receipt) },
+    { ...emptyInputTiming(), receipts: [{ ...receipt, outcome: "maybe" }] },
+    { ...emptyInputTiming(), receipts: [{ ...receipt, receivedTick: "9" }] },
+    { ...emptyInputTiming(), receipts: [{ ...receipt, unexpected: true }] },
+  ])
+    expect(() =>
+      parseServer(JSON.stringify({ ...baseline, inputTiming: invalid })),
+    ).toThrow();
 });
 test("slow output retains only latest snapshot and closes after deadline", () => {
   let buffered = 20000,
@@ -83,7 +131,10 @@ test("versioned replay and player counters fail closed", () => {
     null,
     { ...trace, version: 1 },
     { ...trace, contentVersion: "playground-1" },
-    { ...trace, inputs: [{ moveX: 0, jumpPressed: true, elapsed: 100 }] },
+    {
+      ...trace,
+      inputs: [{ jetHeld: false, moveX: 0, jumpPressed: true, elapsed: 100 }],
+    },
   ])
     expect(() => parseTrace(value)).toThrow("incompatible trace");
 });

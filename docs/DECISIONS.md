@@ -59,3 +59,38 @@ Soak evidence now goes into a unique build-labelled run directory so previous re
 The full jump-forgiveness soak completed but exceeded the correction budget. No lead/timing adaptation was added to hide that result. Before acceptance, isolate the late-input burst and retest the unchanged budget; browser RSS growth also needs interpretation beyond the server-only memory alarm. See `VALIDATION.md` for the measurements and their limits.
 
 The user subsequently reported that the jump-forgiveness playtest passed. Retain both six-tick windows; no movement adjustment is called for by that feedback. This human acceptance is separate from the unresolved automated correction budget and browser-memory observations.
+
+## Timing prerequisite before jets — 31 August 2026
+
+A deterministic regression reproduces baseline-only prediction lead becoming insufficient when application latency increases after calibration. With identical movement, seeded jitter and phase, the frozen control has 798 late commands and correction p95 0.40 units; increasing lead from later pings has 13 transitional late commands, p95 zero, and no late commands after settling. These are virtual-clock results, not live-browser measurements or proof of the old soak's cause.
+
+Use the smallest demonstrated fix: allow the existing bounded lead formula to increase on later pong samples. Do not change clock mapping, physics, server deadlines, rendering, or acceptance thresholds. Keep lead from decreasing until a fresh epoch to avoid an input-generation pause. Add per-player receipt counters and bounded correlated timing evidence. The 30-minute unchanged-budget base-movement soak remains the gate for jet work. If that gate fails, leave jets unimplemented and report the evidence.
+
+The instrumented live soak subsequently failed its correction gate. A post-reset P1 epoch had 939 observed late commands out of 3,589 correlated commands, with 272 corrections above 0.08 units out of 1,198 snapshots. Outgoing delay p95 was 73.6 ms, similar to its neighbouring epochs, but the inferred tick-mapping residual was approximately +2.95 ticks instead of zero. The following baseline removed the residual. This inference includes transport/dispatch and tick quantization; it is not a subtraction of browser and server clock origins.
+
+A separate deterministic case confirms that delaying one baseline by 50 ms can leave persistent clock bias even with the new lead updates. Therefore bounded lead growth is an incomplete fix. Per the approved stop condition, leave jets unimplemented. The next timing change must repair stale authoritative-clock mapping, test delayed baselines as well as ongoing latency changes, and pass the same full-duration correction budget without hiding corrections or relaxing limits. No clock-adjustment algorithm is accepted solely from the aggregate percentile.
+
+
+## Timestamp-based baseline age
+
+The delayed-baseline reproduction justifies replacing the baseline's assumed half-RTT age. `ServerClock` estimates the server/browser monotonic offset from ping midpoints, choosing the lowest RTT among eight recent samples to limit queue-delay contamination. It ages each baseline using its server timestamp and that estimate. Absolute process clock origins are never assumed equal. Asymmetric transit remains an estimation limitation; this local harness does not establish internet fairness.
+
+Later offset changes slew the running tick estimate at 90–110% of normal speed. They neither reverse time nor freeze input generation. A fresh baseline can immediately establish a new tick/time relation, including after server timing debt was discarded. Connection and latency-preset changes clear clock samples. Lead retains the existing 2–12 formula; there is no increase to server windows, history limits, correction thresholds, or simulation delta-time.
+
+Retain frozen-lead and biased-baseline controls as evidence of the old defects. The new mapping must pass the same scenarios, varied frame phases, short/long stalls, live delayed-baseline browser checks, and the full soak. Add opt-in retained-heap/DOM profiling of test-owned Chromium pages; label forced collections because they can affect scheduling. All timing samples remain included.
+
+## Jet experiment
+
+The timestamp-mapping prerequisite passed its full soak and retained-memory investigation before jet implementation started. Keep the previous render interpolation patch reverted. Jets are an experiment behind a shared server-owned toggle, disabled on startup. Either Shift supplies held thrust; both keys must release for grounded refill. Use the agreed 45 fuel ticks, 45 acceleration, 12 upward cap and one fuel tick of recharge per grounded released tick.
+
+Rules, fuel and completed-tick activity are authoritative replay state. A mode change resets both players with a two-phase epoch rebase, sharing Reset's throttle. Repeated same-value requests are harmless no-ops. Keep simple DOM fuel/jet indicators and one static roof; do not add combat, imported art, effects or audio. Preserve the six-tick jump forgiveness and separate collision sweeps. Local comparison against the saved pre-jet fixtures matched all 1,431 ticks exactly with jets disabled.
+
+The next human decision is whether short bursts improve air control while ordinary jumps, platforms and landings remain useful. Keep, revise or remove the experiment before choosing combat work; passing network tests is not proof of movement feel.
+
+## Browser scheduling allowance
+
+The first jet soak failed after warm-up with 0.133333-unit ordinary correction p95. Correlated commands spent 100–120 ms in a queue configured for 40–60 ms; late receipts accompanied most large corrections. A fuel-display optimization did not survive an original/modified/original performance comparison and was not retained. Do not blame that UI change or reinstate the reverted render interpolation patch.
+
+Build `playground-jets-v2` measures how late each browser delay-queue callback runs relative to its due time. Add the largest of the last 120 measurements (each clamped to 0–250 ms) to the configured jitter allowance in the existing lead formula. Both directions contribute; disconnect and preset changes clear the samples. A live epoch can only increase lead, still bounded to 2–12 ticks. Server deadlines, 16-tick future window, physics and correction budgets stay unchanged. This conservatively budgets observed main-thread delay without pretending it is packet loss. Sudden stalls can still expire commands before adaptation, and larger lead delays authoritative execution; assess the trade-off in the human playtest.
+
+The repeated 70 ms virtual-stall control has ten late commands (four after settling); measured allowance reduces that to one (zero after settling), with the same server execution and retirement rules. Browser coverage measures the allowance under repeated short stalls. Full-duration acceptance remains required and is reported separately in `VALIDATION.md`.

@@ -1,9 +1,13 @@
 import { chromium, type Browser, type Page } from "@playwright/test";
+import { heapProfile } from "./heap-profile";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { BUILD_ID, percentile } from "@derp/protocol";
 
 const seconds = Number(process.argv[2] ?? 1800);
+const jets = process.argv.includes("--jets");
+const profileMemory = process.argv.includes("--profile-memory");
+const memory: unknown[] = [];
 if (!Number.isInteger(seconds) || seconds < 10 || seconds > 7200)
   throw new Error("Duration must be 10–7200 seconds (default 1800)");
 const root = resolve(import.meta.dir, "..");
@@ -23,6 +27,7 @@ async function fingerprint() {
     "apps/client/vite.config.ts",
     "tools/serve.ts",
     "tools/soak.ts",
+    "tools/heap-profile.ts",
   ];
   for (const directory of ["apps", "packages"])
     for await (const file of new Bun.Glob("*/src/*.{ts,css}").scan({
@@ -49,6 +54,8 @@ const browsers: Browser[] = [],
   pages: Page[] = [];
 const errors: string[] = [];
 const rows: Record<string, unknown>[] = [];
+const timingFile = Bun.file(resolve(runDirectory, "timing.jsonl")).writer();
+const lastSequences = [0, 0];
 let resets = 0,
   rejoins = 0;
 const startedAt = new Date().toISOString();
@@ -63,6 +70,15 @@ async function join(page: Page) {
   await page.waitForFunction(() =>
     window.__derp.diagnostics().status.includes("movement active"),
   );
+  if (jets && !(await read(page)).rules.jetsEnabled) {
+    await page.locator("#jets").click();
+    await page.waitForFunction(
+      () => window.__derp.diagnostics().rules.jetsEnabled,
+    );
+    await page.waitForFunction(() =>
+      window.__derp.diagnostics().status.includes("movement active"),
+    );
+  }
 }
 async function read(page: Page): Promise<any> {
   return page.evaluate(() => window.__derp.diagnostics());
@@ -114,6 +130,11 @@ try {
       await page.keyboard.up(right ? "KeyA" : "KeyD");
       await page.keyboard.down(right ? "KeyD" : "KeyA");
       if (step % 2 === i) await page.keyboard.press("Space");
+      if (jets) {
+        if (step % 3 === i)
+          await page.keyboard.down(i ? "ShiftRight" : "ShiftLeft");
+        else await page.keyboard.up(i ? "ShiftRight" : "ShiftLeft");
+      }
     }
     if (step % 60 === 20) {
       await pages[0]!.locator("#reset").click();
@@ -129,11 +150,30 @@ try {
         viewport: { width: 1440, height: 1000 },
       });
       pages[1] = page;
+      lastSequences[1] = 0;
       await join(page);
       rejoins++;
     }
     if (step % 5 === 0) {
       const clients = await Promise.all(pages.map(read));
+      for (let index = 0; index < pages.length; index++) {
+        const records = await pages[index]!.evaluate(() =>
+          window.__derp.timingRecords(),
+        );
+        const fresh = records.filter(
+          (record) => Number(record.sequence) > lastSequences[index]!,
+        );
+        if (fresh.length) {
+          timingFile.write(
+            JSON.stringify({
+              elapsed: (performance.now() - begin) / 1000,
+              playerId: clients[index].playerId,
+              records: fresh,
+            }) + "\n",
+          );
+          lastSequences[index] = Number(fresh.at(-1)!.sequence);
+        }
+      }
       for (const client of clients) {
         if (
           !client.playerId ||
@@ -146,11 +186,27 @@ try {
           client.interpolationDepth > 40 ||
           client.queues.incoming > 256 ||
           client.queues.outgoing > 256 ||
-          client.renderer.players > 2
+          client.renderer.players > 2 ||
+          client.rules.jetsEnabled !== jets
         )
           throw new Error("Resource bound exceeded");
       }
       rows.push({ elapsed: (performance.now() - begin) / 1000, clients });
+    }
+    if (profileMemory && step >= 300 && step % 300 === 0) {
+      for (let index = 0; index < pages.length; index++)
+        memory.push(
+          await heapProfile(
+            pages[index]!,
+            runDirectory,
+            `heap-${step}-p${index + 1}`,
+            step === 300,
+          ),
+        );
+      await Bun.write(
+        resolve(runDirectory, "heap-profile.json"),
+        JSON.stringify(memory, null, 2),
+      );
     }
     if (step % 60 === 0)
       console.log(
@@ -172,6 +228,21 @@ try {
     if (errors.length) throw new Error(errors.join("; "));
     await sleep(Math.max(0, begin + (step + 1) * 1000 - performance.now()));
   }
+  if (profileMemory) {
+    for (let index = 0; index < pages.length; index++)
+      memory.push(
+        await heapProfile(
+          pages[index]!,
+          runDirectory,
+          `heap-final-p${index + 1}`,
+          true,
+        ),
+      );
+    await Bun.write(
+      resolve(runDirectory, "heap-profile.json"),
+      JSON.stringify(memory, null, 2),
+    );
+  }
   const final = await Promise.all(pages.map(read));
   for (let i = 0; i < pages.length; i++)
     await pages[i]!.screenshot({
@@ -190,6 +261,12 @@ try {
     tickP95: Math.max(...clients.map((d) => d.server.tickP95)),
     tickP99: Math.max(...clients.map((d) => d.server.tickP99)),
     correctionP95: Math.max(...clients.map((d) => d.corrections.p95)),
+    ordinaryCorrectionP95: Math.max(
+      ...clients.map((d) => d.correctionsByActivity.ordinary.p95),
+    ),
+    thrustCorrectionP95: Math.max(
+      ...clients.map((d) => d.correctionsByActivity.thrust.p95),
+    ),
     upstreamBps: Math.max(...clients.map((d) => d.upstreamBps)),
     downstreamBps: Math.max(...clients.map((d) => d.downstreamBps)),
     postWarmupMedianGrowthMB: growthMB,
@@ -202,12 +279,17 @@ try {
     sourceUnchanged: unchanged,
     tick: budgets.tickP95 <= 8 && budgets.tickP99 <= 12,
     corrections: budgets.correctionP95 < 0.08,
+    activityCorrections:
+      !jets ||
+      (budgets.ordinaryCorrectionP95 < 0.08 &&
+        budgets.thrustCorrectionP95 < 0.08 &&
+        clients.some((d) => d.correctionsByActivity.thrust.count > 0)),
     bandwidth: budgets.upstreamBps <= 8000 && budgets.downstreamBps <= 64000,
     memory: growthMB < 32,
     renderer: clients.every(
       (client) =>
-        client.renderer.sceneObjects <= 13 &&
-        client.renderer.geometries <= 8 &&
+        client.renderer.sceneObjects <= 14 &&
+        client.renderer.geometries <= 9 &&
         client.renderer.programs <= 2,
     ),
   };
@@ -218,6 +300,8 @@ try {
     finishedAt: new Date().toISOString(),
     durationSeconds: (performance.now() - begin) / 1000,
     requestedSeconds: seconds,
+    profileMemory,
+    jets,
     resets,
     rejoins,
     sourceHash,
@@ -248,6 +332,8 @@ try {
     passed: false,
     startedAt,
     requestedSeconds: seconds,
+    profileMemory,
+    jets,
     sourceHash,
     resets,
     rejoins,
@@ -258,6 +344,7 @@ try {
   };
   process.exitCode = 1;
 } finally {
+  await timingFile.end();
   await Bun.write(
     resolve(runDirectory, "report.json"),
     JSON.stringify(report, null, 2),

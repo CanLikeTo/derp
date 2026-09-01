@@ -10,7 +10,7 @@ import {
 import { Room } from "../../apps/server/src/room";
 import { Prediction, Interpolation } from "../../apps/client/src/prediction";
 import { Controls } from "../../apps/client/src/input";
-import { type StateMessage } from "@derp/protocol";
+import { type StateMessage, emptyInputTiming } from "@derp/protocol";
 beforeAll(initializePhysics);
 const stats = {
   tickP95: 0,
@@ -27,24 +27,34 @@ const stats = {
 test("floor, wall, ceiling and ledge collisions; restoration after teleport", () => {
   const sim = new Simulation();
   let state = spawnState("a", 1);
-  for (let i = 0; i < 60; i++) state = sim.step(state, NEUTRAL);
+  for (let i = 0; i < 60; i++)
+    state = sim.step(state, NEUTRAL, { jetsEnabled: false });
   expect(state.grounded).toBe(true);
   expect(state.y).toBeCloseTo(0.9101, 3);
-  state = sim.step(state, { moveX: 0, jumpPressed: true });
+  state = sim.step(
+    state,
+    { jetHeld: false, moveX: 0, jumpPressed: true },
+    { jetsEnabled: false },
+  );
   let max = state.y;
   for (let i = 0; i < 60; i++) {
-    state = sim.step(state, NEUTRAL);
+    state = sim.step(state, NEUTRAL, { jetsEnabled: false });
     max = Math.max(max, state.y);
   }
   expect(max).toBeLessThan(2.851);
   expect(max).toBeGreaterThan(2.7);
   expect(state.grounded).toBe(true);
   state = { ...state, x: -4, y: 8, vy: 0 };
-  for (let i = 0; i < 120; i++) state = sim.step(state, NEUTRAL);
+  for (let i = 0; i < 120; i++)
+    state = sim.step(state, NEUTRAL, { jetsEnabled: false });
   expect(state.y).toBeCloseTo(2.4101, 3);
   state = { ...state, x: 11, y: 0.92, vy: 0 };
   for (let i = 0; i < 60; i++)
-    state = sim.step(state, { moveX: 1, jumpPressed: false });
+    state = sim.step(
+      state,
+      { jetHeld: false, moveX: 1, jumpPressed: false },
+      { jetsEnabled: false },
+    );
   expect(state.x).toBeLessThan(11.601);
   expect(state.x).toBeGreaterThan(11.58);
   sim.dispose();
@@ -53,9 +63,10 @@ test("replay resumes exactly from a saved state with stale physics state replace
   const trace = fixtureTrace(),
     states = replay(trace),
     sim = new Simulation();
-  sim.step({ ...trace.initial, x: 10, y: 10 }, NEUTRAL);
+  sim.step({ ...trace.initial, x: 10, y: 10 }, NEUTRAL, { jetsEnabled: false });
   let state = states[499]!;
-  for (const input of trace.inputs.slice(500)) state = sim.step(state, input);
+  for (const input of trace.inputs.slice(500))
+    state = sim.step(state, input, { jetsEnabled: false });
   expect(state).toEqual(states.at(-1)!);
   sim.dispose();
 });
@@ -70,7 +81,11 @@ test("holding into a platform side does not cancel falling velocity", () => {
     grounded: false,
   };
   for (let i = 0; i < 60; i++)
-    state = sim.step(state, { moveX: -1, jumpPressed: false });
+    state = sim.step(
+      state,
+      { jetHeld: false, moveX: -1, jumpPressed: false },
+      { jetsEnabled: false },
+    );
   expect(state.y).toBeLessThan(1);
   expect(state.grounded).toBe(true);
   sim.dispose();
@@ -99,6 +114,7 @@ test("room caps identity, consumes one input per tick, expires jumps and keeps g
   expect(room.join("c")).toBeUndefined();
   for (let i = 0; i < 60; i++) room.step();
   const frame = {
+    jetHeld: false,
     type: "input" as const,
     inputEpoch: peer.epoch,
     tick: room.tick + 1,
@@ -134,6 +150,7 @@ test("snapshot tick retires missing inputs, restores and replays pending state",
   const peer = room.join("a")!;
   room.baseline("a");
   const baseline: StateMessage = {
+    rules: { jetsEnabled: false },
     type: "baseline",
     tick: 0,
     serverTime: 0,
@@ -141,11 +158,16 @@ test("snapshot tick retires missing inputs, restores and replays pending state",
     inputEpoch: peer.epoch,
     players: room.snapshot(),
     stats,
+    inputTiming: emptyInputTiming(),
     reason: "test",
   };
   prediction.baseline(baseline, 0);
   for (let i = 1; i <= 12; i++) {
-    const input = prediction.advance({ moveX: 1, jumpPressed: i === 5 });
+    const input = prediction.advance({
+      jetHeld: false,
+      moveX: 1,
+      jumpPressed: i === 5,
+    });
     if (i > 4) room.input("a", input);
   }
   for (let i = 0; i < 8; i++) room.step();
@@ -166,6 +188,7 @@ test("snapshot tick retires missing inputs, restores and replays pending state",
 test("remote interpolation holds instead of extrapolating; histories bounded", () => {
   const buffer = new Interpolation();
   const base: StateMessage = {
+    rules: { jetsEnabled: false },
     type: "snapshot",
     tick: 1,
     serverTime: 0,
@@ -173,6 +196,7 @@ test("remote interpolation holds instead of extrapolating; histories bounded", (
     inputEpoch: 1,
     players: [spawnState("a", 1), spawnState("b", 2)],
     stats,
+    inputTiming: emptyInputTiming(),
     reason: "",
   };
   buffer.push(base);
@@ -195,6 +219,7 @@ test("reconciliation preserves a timely retired buffer but never recreates a mis
     room.baseline("a");
     peer.state = { ...peer.state, x: 8, y: 2, vy: -10 };
     const baseline: StateMessage = {
+      rules: { jetsEnabled: false },
       type: "baseline",
       tick: 0,
       serverTime: 0,
@@ -202,10 +227,15 @@ test("reconciliation preserves a timely retired buffer but never recreates a mis
       inputEpoch: peer.epoch,
       players: room.snapshot(),
       stats,
+      inputTiming: emptyInputTiming(),
       reason: "test",
     };
     prediction.baseline(baseline, 0);
-    const press = prediction.advance({ moveX: 0, jumpPressed: true });
+    const press = prediction.advance({
+      jetHeld: false,
+      moveX: 0,
+      jumpPressed: true,
+    });
     if (delivered) room.input("a", press);
     room.step();
     for (let i = 0; i < 5; i++) prediction.advance(NEUTRAL);
@@ -237,6 +267,7 @@ test("suspension cancels pending replay and visual offset while authoritative st
   room.baseline("a");
   peer.state = { ...peer.state, x: 8, y: 2, vy: -10 };
   const base: StateMessage = {
+    rules: { jetsEnabled: false },
     type: "baseline",
     tick: 0,
     serverTime: 0,
@@ -244,10 +275,14 @@ test("suspension cancels pending replay and visual offset while authoritative st
     inputEpoch: peer.epoch,
     players: room.snapshot(),
     stats,
+    inputTiming: emptyInputTiming(),
     reason: "test",
   };
   prediction.baseline(base, 0);
-  room.input("a", prediction.advance({ moveX: 0, jumpPressed: true }));
+  room.input(
+    "a",
+    prediction.advance({ jetHeld: false, moveX: 0, jumpPressed: true }),
+  );
   room.step();
   prediction.reconcile({
     ...base,
@@ -297,6 +332,7 @@ test("fresh epochs and suspend cancel buffered intent without refilling coyote o
     peer.state = { ...state };
     const oldEpoch = peer.epoch;
     room.input("a", {
+      jetHeld: false,
       type: "input",
       inputEpoch: oldEpoch,
       tick: room.tick + 1,

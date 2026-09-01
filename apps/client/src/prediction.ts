@@ -3,6 +3,7 @@ import {
   NEUTRAL,
   CONTENT_VERSION,
   TRACE_VERSION,
+  type RoomRules,
   type PlayerState,
   type Input,
   type Trace,
@@ -13,7 +14,12 @@ import {
   type InputFrame,
   type StateMessage,
 } from "@derp/protocol";
+import { TimingLog } from "./timing";
 export class Prediction {
+  timing = new TimingLog();
+  rules: RoomRules = { jetsEnabled: false };
+  ordinaryCorrections = new Samples();
+  thrustCorrections = new Samples();
   private simulation = new Simulation();
   state: PlayerState | undefined;
   authoritative: PlayerState | undefined;
@@ -28,6 +34,7 @@ export class Prediction {
     const local = message.players.find(
       (player) => player.id === message.playerId,
     )!;
+    this.rules = { ...message.rules };
     this.state = { ...local };
     this.authoritative = { ...local };
     this.tick = message.tick;
@@ -49,7 +56,7 @@ export class Prediction {
       tick: ++this.tick,
       ...input,
     };
-    this.state = this.simulation.step(this.state, frame);
+    this.state = this.simulation.step(this.state, frame, this.rules);
     this.history.set(this.tick, { input: frame, state: { ...this.state } });
     return frame;
   }
@@ -60,6 +67,8 @@ export class Prediction {
       !this.state
     )
       return;
+    if (message.rules.jetsEnabled !== this.rules.jetsEnabled)
+      throw new Error("Room rules require a new baseline");
     const authoritative = message.players.find(
       (player) => player.id === message.playerId,
     )!;
@@ -70,6 +79,18 @@ export class Prediction {
         sameTick.y - authoritative.y,
       );
       this.corrections.add(this.correction);
+      (sameTick.jetActive || authoritative.jetActive
+        ? this.thrustCorrections
+        : this.ordinaryCorrections
+      ).add(this.correction);
+      this.timing.add({
+        stage: "correction",
+        playerId: message.playerId,
+        inputEpoch: message.inputEpoch,
+        tick: message.tick,
+        at: performance.now(),
+        magnitude: this.correction,
+      });
     }
     const old = this.state;
     this.authoritative = { ...authoritative };
@@ -81,7 +102,7 @@ export class Prediction {
     for (let tick = message.tick + 1; tick <= target; tick++) {
       const entry = this.history.get(tick);
       if (!entry) throw new Error("Prediction timeline has a gap");
-      this.state = this.simulation.step(this.state, entry.input);
+      this.state = this.simulation.step(this.state, entry.input, this.rules);
       entry.state = { ...this.state };
     }
     this.tick = target;
@@ -102,9 +123,11 @@ export class Prediction {
       version: TRACE_VERSION,
       contentVersion: CONTENT_VERSION,
       initial: { ...this.authoritative },
+      rules: { ...this.rules },
       inputs: [...this.history.values()].map((entry) => ({
         moveX: entry.input.moveX,
         jumpPressed: entry.input.jumpPressed,
+        jetHeld: entry.input.jetHeld,
       })),
     };
   }
@@ -113,7 +136,11 @@ export class Prediction {
     this.offset = { x: 0, y: 0 };
     this.tick = this.finalizedTick;
     if (this.authoritative)
-      this.state = { ...this.authoritative, jumpBufferTicksRemaining: 0 };
+      this.state = {
+        ...this.authoritative,
+        jumpBufferTicksRemaining: 0,
+        jetActive: false,
+      };
   }
   clear() {
     this.state = undefined;
@@ -162,7 +189,7 @@ export class Interpolation {
         const a = before.players.find((p) => p.id === player.id) ?? player;
         const b = after.players.find((p) => p.id === player.id) ?? a;
         return {
-          ...player,
+          ...a,
           x: a.x + (b.x - a.x) * t,
           y: a.y + (b.y - a.y) * t,
         };

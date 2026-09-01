@@ -1,6 +1,23 @@
+# Jet experiment playtest
+
+Status: **pending human playtest**. Start `bun run dev`, connect two windows at `http://127.0.0.1:5173`, and test directly on the computer. The server starts with jets off. Click **Enable jets · resets both players**; either player can change the shared mode.
+
+1. Hold either Shift key for a short burst. Fuel lasts 0.75 seconds of thrust. Releasing Shift removes acceleration but keeps upward momentum.
+2. Exhaust the fuel and keep Shift held through landing: it must stay empty. Release both Shift keys on the ground to refill. Try holding both and releasing only one.
+3. Combine Space and Shift. Test the low ceiling and the room roof, and hold into a wall. Labels should stay visible. Ceiling contact still spends fuel.
+4. Compare ordinary jumps with jets off/on. Are short bursts useful without making platforms, landing and normal jumps irrelevant?
+5. Repeat under the 100 ms and 200 ms added-RTT presets. Local fuel/movement should respond before delayed server confirmation; the other window should show the historical `JET` marker with its pose.
+6. Switch focus while thrusting, reset, reconnect, and toggle jets from the other window. There should be no stale thrust. Reset preserves mode; restarting Bun disables jets.
+7. Use the mode button with Tab/Enter. Shift+Tab must still navigate normally. The button and Reset share a brief cooldown.
+8. Export diagnostics after a surprise and record the build, browser/OS, preset, steps and expected behavior. Replay the pending-input trace with `bun run replay path/to/export.json`.
+
+Decision: **keep, revise or remove jets** before combat. Record whether fuel/refill is clear, the burst feels controllable, ordinary jumps remain useful, and the remote indicator reads correctly. This is not a maximum-player, real-network or low-end performance test.
+
+---
+
 # Jump-forgiveness playtest
 
-Status: **passed, as reported by the user on 31 August 2026**: “The playtest passed.” This records human acceptance of the jump-forgiveness playtest. Specific browser/preset coverage, measurements and a simultaneous two-human session were not separately reported. The automated correction-budget failure and browser-memory investigation remain open.
+Status: **passed, as reported by the user on 31 August 2026**: “The playtest passed.” This records human acceptance of the jump-forgiveness playtest. Specific browser/preset coverage, measurements and a simultaneous two-human session were not separately reported. The subsequent timing repair passed its full soak and retained-memory investigation; see `VALIDATION.md`.
 
 ## Setup
 

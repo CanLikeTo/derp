@@ -20,6 +20,7 @@ export class Controls {
     const input: Input = {
       moveX: left === right ? 0 : left ? -1 : 1,
       jumpPressed: this.jump,
+      jetHeld: this.held.has("ShiftLeft") || this.held.has("ShiftRight"),
     };
     this.jump = false;
     return input;

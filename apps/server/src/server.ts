@@ -113,7 +113,9 @@ export async function startServer(port = 3001) {
         playerId: socket.data.id,
         inputEpoch: peer.epoch,
         players: room.snapshot(),
+        rules: { ...room.rules },
         stats: stats(),
+        inputTiming: { ...peer.timing, queued: peer.inputs.size },
         reason,
       });
   }
@@ -229,11 +231,20 @@ export async function startServer(port = 3001) {
           const peer = room.participants.get(meta.id)!;
           if (message.inputEpoch !== peer.epoch) return;
           if (message.type === "input") {
-            room.input(meta.id, message);
+            room.input(meta.id, message, now);
             return;
           }
           if (message.type === "suspend") {
             room.suspend(meta.id);
+            return;
+          }
+          if (message.type === "setJets") {
+            if (message.enabled === room.rules.jetsEnabled) return;
+            if (now - meta.lastControl < 1000) return;
+            meta.lastControl = now;
+            room.rules = { jetsEnabled: message.enabled };
+            room.reset();
+            rebaseAll("jets mode changed");
             return;
           }
           if (message.type === "reset") {
