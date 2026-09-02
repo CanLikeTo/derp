@@ -50,6 +50,8 @@ export class PointerAim {
 export class Controls {
   private held = new Set<string>();
   private jump = false;
+  private fireHeld = false;
+  private fireLatched = false;
   press(code: string, repeat = false) {
     if (repeat || this.held.has(code)) return;
     this.held.add(code);
@@ -58,9 +60,21 @@ export class Controls {
   release(code: string) {
     this.held.delete(code);
   }
+  pressFire() {
+    if (!this.fireHeld) this.fireLatched = true;
+    this.fireHeld = true;
+  }
+  releaseFire() {
+    this.fireHeld = false;
+  }
+  clearFire() {
+    this.fireHeld = false;
+    this.fireLatched = false;
+  }
   clear() {
     this.held.clear();
     this.jump = false;
+    this.clearFire();
   }
   sample(aimQ = 0): Input {
     const left = this.held.has("KeyA") || this.held.has("ArrowLeft");
@@ -70,8 +84,13 @@ export class Controls {
       jumpPressed: this.jump,
       jetHeld: this.held.has("ShiftLeft") || this.held.has("ShiftRight"),
       aimQ,
+      fire: this.fireHeld || this.fireLatched,
     };
     this.jump = false;
+    this.fireLatched = false;
     return input;
+  }
+  get firing() {
+    return this.fireHeld || this.fireLatched;
   }
 }

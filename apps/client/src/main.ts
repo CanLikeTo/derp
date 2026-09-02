@@ -5,6 +5,7 @@ import {
   TICK_MS,
   MOVEMENT,
   JETS,
+  CARBINE,
   aimQToDegrees,
   type Trace,
 } from "@derp/simulation";
@@ -23,6 +24,7 @@ import { predictionLead, SchedulingJitter, ServerClock } from "./timing";
 import { Controls, PointerAim, type WorldPoint } from "./input";
 import { DelayQueue, PRESETS, type Preset } from "./network";
 import { View } from "./view";
+import { CombatPresentation } from "./combat";
 import "./style.css";
 
 const app = document.querySelector<HTMLElement>("#app")!;
@@ -46,8 +48,8 @@ function start() {
     <header class="header"><div class="brand">dERP<span>LAB</span></div><div class="build-label">PLAYGROUND / 001<br><span>AUTHORITATIVE MOVEMENT LAB</span></div><div class="local-badge"><i></i> LOCAL ONLY</div></header>
     <section class="intro"><h1>Small room. <em>Big plans.</em></h1><p>Two players. One server. Absolutely no explosions. Yet.</p></section>
     <div class="layout"><section class="arena-panel"><div class="panel-heading"><span>01 / TEST CHAMBER</span><span id="occupancy">0 / 2 PLAYERS</span></div>
-      <div id="viewport" tabindex="0" role="application" aria-label="Playground. Move the mouse to aim. A or D moves, Space jumps, and either Shift key thrusts when jets are enabled."><div class="arena-watermark" aria-hidden="true">dERP<br><small>WORK IN PROGRESS</small></div></div>
-      <div class="arena-footer"><span><kbd>MOUSE</kbd> AIM <span class="divider">/</span> <kbd>A</kbd><kbd>D</kbd> MOVE <span class="divider">/</span> <kbd>SPACE</kbd> JUMP <span class="divider">/</span> <kbd>SHIFT</kbd> JET</span><span id="focus-label">CLICK CONNECT TO ENTER</span></div>
+      <div id="viewport" tabindex="0" role="application" aria-label="Playground. Move the mouse to aim, hold the primary mouse button to fire, A or D moves, Space jumps, and either Shift key thrusts when jets are enabled."><div class="arena-watermark" aria-hidden="true">dERP<br><small>WORK IN PROGRESS</small></div></div>
+      <div class="arena-footer"><span><kbd>MOUSE</kbd> AIM + FIRE <span class="divider">/</span> <kbd>A</kbd><kbd>D</kbd> MOVE <span class="divider">/</span> <kbd>SPACE</kbd> JUMP <span class="divider">/</span> <kbd>SHIFT</kbd> JET</span><span id="focus-label">CLICK CONNECT TO ENTER</span></div>
       <div class="readouts"><div><span>SERVER</span><strong id="tick">—</strong><small>60 Hz fixed simulation</small></div><div><span>ROUND TRIP</span><strong id="rtt">—</strong><small>Measured, including added delay</small></div><div><span>CORRECTION P95</span><strong id="correction">—</strong><small>Compared at the same tick</small></div></div>
     </section><aside>
       <section class="control-panel"><div class="panel-heading">02 / CONNECTION</div><div id="status" role="status" aria-live="polite">Disconnected</div><p class="muted">Open a second window at this address to add another player.</p><button id="connect" class="primary">Connect <span>↗</span></button><div class="button-row"><button id="disconnect">Disconnect</button><button id="reconnect">Reconnect</button></div><button id="reset" disabled>Reset playground <span>↺</span></button></section>
@@ -62,7 +64,8 @@ function start() {
   const prediction = new Prediction(),
     interpolation = new Interpolation(),
     controls = new Controls(),
-    pointer = new PointerAim();
+    pointer = new PointerAim(),
+    combat = new CombatPresentation();
   const frames = new Samples(),
     rtts = new Samples(120);
   let socket: WebSocket | undefined,
@@ -82,6 +85,8 @@ function start() {
   let latest: StateMessage | undefined,
     receivedBytes = 0,
     sentBytes = 0,
+    maxReceivedMessageBytes = 0,
+    maxSentMessageBytes = 0,
     resyncs = 0;
   let firstTick = 0,
     started = performance.now(),
@@ -102,16 +107,19 @@ function start() {
   const outgoing = new DelayQueue(
     preset,
     () => disconnect("Outgoing delay queue exhausted"),
-    observeScheduling,
+    (lateness) => observeScheduling(lateness, "outgoing"),
   );
   const incoming = new DelayQueue(
     preset,
     () => disconnect("Incoming delay queue exhausted"),
-    observeScheduling,
+    (lateness) => observeScheduling(lateness, "incoming"),
   );
   const desiredLead = () =>
     predictionLead(rtt, PRESETS[preset].jitter + scheduling.allowance);
-  function observeScheduling(lateness: number) {
+  function observeScheduling(
+    lateness: number,
+    direction: "incoming" | "outgoing",
+  ) {
     scheduling.observe(lateness);
     if (timingReady && !syncing) {
       const next = Math.max(lead, desiredLead());
@@ -124,7 +132,16 @@ function start() {
           lead: next,
         });
       lead = next;
+      if (
+        direction === "outgoing" &&
+        PRESETS[preset].delay + lateness + TICK_MS * 2 > lead * TICK_MS
+      ) {
+        scheduling.clear();
+        resync("outgoing scheduling debt");
+        return false;
+      }
     }
+    return true;
   }
   const serverTick = () => clock.tick(performance.now());
   function setStatus(value: string) {
@@ -157,7 +174,9 @@ function start() {
         return;
       }
       const raw = JSON.stringify(message);
-      sentBytes += new TextEncoder().encode(raw).length;
+      const bytes = new TextEncoder().encode(raw).length;
+      sentBytes += bytes;
+      maxSentMessageBytes = Math.max(maxSentMessageBytes, bytes);
       if (message.type === "input")
         prediction.timing.add({
           stage: "sent",
@@ -180,6 +199,7 @@ function start() {
     pointer.clear();
     prediction.clear();
     interpolation.clear();
+    combat.clear();
     latest = undefined;
     playerId = "";
     syncing = false;
@@ -199,6 +219,8 @@ function start() {
     started = performance.now();
     receivedBytes = 0;
     sentBytes = 0;
+    maxReceivedMessageBytes = 0;
+    maxSentMessageBytes = 0;
     const current = new WebSocket(
       `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`,
     );
@@ -218,7 +240,9 @@ function start() {
         disconnect("Invalid binary server message");
         return;
       }
-      receivedBytes += new TextEncoder().encode(event.data).length;
+      const bytes = new TextEncoder().encode(event.data).length;
+      receivedBytes += bytes;
+      maxReceivedMessageBytes = Math.max(maxReceivedMessageBytes, bytes);
       incoming.enqueue(() => {
         if (ownGeneration !== generation) return;
         try {
@@ -300,6 +324,10 @@ function start() {
       }
       return;
     }
+    if (message.type === "events") {
+      if (!combat.receive(message, playerId)) resync("combat event gap");
+      return;
+    }
     for (const receipt of message.inputTiming.receipts)
       prediction.timing.add({
         stage: "receipt",
@@ -313,6 +341,7 @@ function start() {
       firstTick = message.tick;
       if (!timingReady) {
         prediction.baseline(message, message.tick);
+        combat.baseline(message);
         interpolation.clear();
         interpolation.push(message);
         syncing = true;
@@ -340,6 +369,7 @@ function start() {
         estimatedTick,
       });
       prediction.baseline(message, Math.floor(serverTick()) + lead);
+      combat.baseline(message);
       interpolation.clear();
       interpolation.push(message);
       syncing = false;
@@ -359,6 +389,10 @@ function start() {
       }
       latest = message;
       lastSnapshotAt = performance.now();
+      if (!combat.snapshot(message)) {
+        resync("combat timeline mismatch");
+        return;
+      }
       interpolation.push(message);
       if (!syncing)
         try {
@@ -386,14 +420,26 @@ function start() {
     if (active && prediction.state) resync("focus restored");
   }
   viewport.addEventListener("pointerdown", (event) => {
+    const wasActive = active;
     viewport.focus();
     updateFocus();
     if (active) pointer.update(event.clientX, event.clientY);
+    if (event.button === 0 && wasActive && active) controls.pressFire();
   });
   viewport.addEventListener("pointermove", (event) => {
     if (active) pointer.update(event.clientX, event.clientY);
   });
-  viewport.addEventListener("pointerleave", () => pointer.clear());
+  viewport.addEventListener("pointerleave", () => {
+    pointer.clear();
+    controls.clearFire();
+  });
+  viewport.addEventListener("pointercancel", () => {
+    pointer.clear();
+    controls.clearFire();
+  });
+  window.addEventListener("pointerup", (event) => {
+    if (event.button === 0) controls.releaseFire();
+  });
   for (const event of ["focus", "blur"])
     window.addEventListener(event, updateFocus);
   for (const event of ["focusin", "focusout", "visibilitychange"])
@@ -484,6 +530,7 @@ function start() {
       protocol: PROTOCOL_VERSION,
       movement: MOVEMENT,
       jets: JETS,
+      carbine: CARBINE,
       rules: prediction.rules,
       status,
       active,
@@ -516,6 +563,14 @@ function start() {
         correctionDegrees: Math.abs(aimQToDegrees(prediction.aimCorrection)),
         corrections: prediction.aimCorrections.summary(),
       },
+      combat: {
+        trigger: controls.firing,
+        predictedCooldown: prediction.state?.carbineCooldownTicksRemaining ?? 0,
+        authoritativeCooldown:
+          prediction.authoritative?.carbineCooldownTicksRemaining ?? 0,
+        activeProjectiles: latest?.projectiles.length ?? 0,
+        ...combat.diagnostics(),
+      },
       corrections: prediction.corrections.summary(),
       correctionsByActivity: {
         ordinary: prediction.ordinaryCorrections.summary(),
@@ -527,6 +582,10 @@ function start() {
       inputTiming: latest?.inputTiming,
       upstreamBps: sentBytes / seconds,
       downstreamBps: receivedBytes / seconds,
+      messageBytes: {
+        maxIncoming: maxReceivedMessageBytes,
+        maxOutgoing: maxSentMessageBytes,
+      },
       queues: {
         incoming: incoming.size,
         outgoing: outgoing.size,
@@ -625,7 +684,17 @@ function start() {
           try {
             for (let i = 0; i < 5 && prediction.tick < target; i++) {
               const aim = pointer.sample(prediction.state!, pointerTarget);
-              send(prediction.advance(controls.sample(aim.aimQ)));
+              combat.stepPrediction();
+              const result = prediction.advanceWithActions(
+                controls.sample(aim.aimQ),
+              );
+              send(result.frame);
+              if (result.shotAuthorized && prediction.state)
+                combat.predictedShot(
+                  prediction.state,
+                  result.frame.inputEpoch,
+                  result.frame.tick,
+                );
             }
           } catch {
             resync("history bound");
@@ -653,6 +722,11 @@ function start() {
         x: prediction.state.x + prediction.offset.x,
         y: prediction.state.y + prediction.offset.y,
       });
+    const renderTick = serverTick() - rtt / 2 / TICK_MS - 100 / TICK_MS;
+    const combatView = combat.presentation(
+      interpolation.projectilesAt(renderTick),
+      renderTick,
+    );
     view.draw(
       players,
       playerId,
@@ -660,6 +734,8 @@ function start() {
       element<HTMLInputElement>("debug").checked,
       pointerTarget,
       reticleVisible,
+      combatView.projectiles,
+      combatView.effects,
     );
     requestAnimationFrame(frame);
   }

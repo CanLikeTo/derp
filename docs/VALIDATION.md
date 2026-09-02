@@ -1,4 +1,26 @@
-# Playground validation — updated 1 September 2026
+# Playground validation — updated 2 September 2026
+
+## Authoritative automatic-carbine lab: automated acceptance passed
+
+Build `playground-carbine-lab-v1`, protocol 6, content `playground-5`, player trace 5 and room replay `projectile-lab-1`. Strict formatting, TypeScript and package boundaries pass. The Bun suite has 65 tests and 2,800 expectations; all pass. Coverage includes automatic cadence and input latching, cooldown restoration, fire-only movement invariance, strict protocol rejection, deterministic event/ID order, generation and cursor recovery, terrain and moving-player sweeps, obstruction, lifetime/cap bounds, prediction confirmation/rejection, and the existing movement, jump, jet and aim replays.
+
+Built-preview and Vite-development Playwright matrices each pass all 45 scenarios across Chromium, Firefox and WebKit. The carbine workflow proves immediate local feedback before a delayed authoritative response, harmless authoritative player impacts, pooled renderer resources, and recovery when a browser scheduling stall invalidates the first predicted shot. Existing replay, rendering, admission, lifecycle, latency, jump, jet, aim and WebGL-failure workflows remain green. The production build and Bun Rapier compatibility gate pass with the existing Rapier bundle-size advisory.
+
+Corrected full soak: **21:18:29–21:48:34 UTC, 1 September 2026**, 1,800.88 seconds, **30 resets and 30 rejoins**. Every automated gate passed. Source fingerprint `fe0753ba58922d33c85e8f8da2cadf1a050a8858e16c090773897933e416fea9` remained unchanged. Two isolated Chromium clients used the routine 100 ms added-RTT preset, jets, deterministic pointer sweeps and automatic/tapped fire.
+
+| Measure | Worst sampled post-warm-up value | Gate |
+| --- | --- | --- |
+| Server work p95 / p99 | 1.763 / 2.450 ms | ≤8 / ≤12 ms |
+| Position / ordinary / thrust correction p95 | 0 / 0 / 0 units | <0.08 units each |
+| Aim correction p95 / maximum | 0 / 0 quantization steps | p95 = 0; maximum reported separately |
+| Upstream / downstream per player | 7.028 / 42.582 kB/s | ≤8 / ≤64 kB/s |
+| Server RSS median growth | 0.672 MiB | <32 MiB investigation alarm |
+| Largest server/client message | 2,570 / 121 bytes | <16 KiB |
+| Renderer resources | 12 projectile slots, 32 effect slots, 20 tracked geometries, 13 live GPU geometries, 6 programs | Stable and bounded |
+
+The run recorded no event gaps, duplicate effects, capacity drops, source-generation mismatches, browser errors, server overruns, crashes or leaked players. Player/projectile/effect, delay and history queues stayed within their caps. Each final client retained one document, 15 application listeners and 96 DOM elements; ordinary two-player samples held 62 scene objects. Human aim/carbine playtests, installed Chrome/Firefox/Safari manual checks, simultaneous two-human firefights, real-display timing, real-network impairment and remote CI remain unverified.
+
+Evidence: `artifacts/playground-carbine-lab-v1-soak-1800s-1788297509892/`. The first 30-minute carbine run completed its 30 reset/rejoin cycles and passed combat, timing, traffic, memory and resource bounds, but failed the unchanged correction gates after late post-reconnect outgoing callbacks were delivered. The client now discards scheduling work that can no longer meet the server deadline and obtains a fresh baseline. A 300-second regression and the corrected full run both passed; the failed evidence remains at `artifacts/playground-carbine-lab-v1-soak-1800s-1788295307074/`.
 
 ## Authoritative mouse aim: automated acceptance passed
 

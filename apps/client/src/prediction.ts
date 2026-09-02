@@ -14,6 +14,7 @@ import {
   LIMITS,
   Samples,
   type InputFrame,
+  type ProjectileView,
   type StateMessage,
 } from "@derp/protocol";
 import { TimingLog } from "./timing";
@@ -52,6 +53,12 @@ export class Prediction {
       this.advance(neutralInput(this.state!.aimQ));
   }
   advance(input: Input): InputFrame {
+    return this.advanceWithActions(input).frame;
+  }
+  advanceWithActions(input: Input): {
+    frame: InputFrame;
+    shotAuthorized: boolean;
+  } {
     if (!this.state) throw new Error("Prediction needs a baseline");
     if (this.history.size >= LIMITS.history)
       throw new Error("Prediction history exhausted");
@@ -61,9 +68,14 @@ export class Prediction {
       tick: ++this.tick,
       ...input,
     };
-    this.state = this.simulation.step(this.state, frame, this.rules);
+    const result = this.simulation.stepWithActions(
+      this.state,
+      frame,
+      this.rules,
+    );
+    this.state = result.state;
     this.history.set(this.tick, { input: frame, state: { ...this.state } });
-    return frame;
+    return { frame, shotAuthorized: result.shotAuthorized };
   }
   reconcile(message: StateMessage) {
     if (
@@ -139,6 +151,7 @@ export class Prediction {
         jumpPressed: entry.input.jumpPressed,
         jetHeld: entry.input.jetHeld,
         aimQ: entry.input.aimQ,
+        fire: entry.input.fire,
       })),
     };
   }
@@ -206,5 +219,42 @@ export class Interpolation {
           aimQ: interpolateAimQ(a.aimQ, b.aimQ, t),
         };
       });
+  }
+  projectilesAt(tick: number): ProjectileView[] {
+    const latest = this.snapshots.at(-1);
+    if (!latest) return [];
+    let before = this.snapshots[0]!;
+    let after = latest;
+    for (const frame of this.snapshots) {
+      if (frame.tick <= tick) before = frame;
+      if (frame.tick >= tick) {
+        after = frame;
+        break;
+      }
+    }
+    const t =
+      after.tick === before.tick
+        ? 0
+        : Math.min(
+            1,
+            Math.max(0, (tick - before.tick) / (after.tick - before.tick)),
+          );
+    return latest.projectiles.map((projectile) => {
+      const a =
+        before.projectiles.find(
+          (candidate) => candidate.id === projectile.id,
+        ) ??
+        after.projectiles.find((candidate) => candidate.id === projectile.id) ??
+        projectile;
+      const b =
+        after.projectiles.find((candidate) => candidate.id === projectile.id) ??
+        a;
+      return {
+        ...a,
+        x: a.x + (b.x - a.x) * t,
+        y: a.y + (b.y - a.y) * t,
+        aimQ: interpolateAimQ(a.aimQ, b.aimQ, t),
+      };
+    });
   }
 }

@@ -86,6 +86,12 @@ export async function startServer(port = 3001) {
     rssMB: process.memoryUsage.rss() / 1048576,
     inBytes,
     outBytes,
+    projectiles: room.projectileSnapshot().length,
+    shots: room.shots,
+    terrainImpacts: room.terrainImpacts,
+    playerImpacts: room.playerImpacts,
+    expiredProjectiles: room.expiredProjectiles,
+    capacityDrops: room.capacityDrops,
   });
   function send(socket: ServerWebSocket<SocketData>, message: ServerMessage) {
     outBytes += socket.data.outbox.offer(
@@ -112,7 +118,10 @@ export async function startServer(port = 3001) {
         serverTime: performance.now(),
         playerId: socket.data.id,
         inputEpoch: peer.epoch,
+        roomGeneration: room.roomGeneration,
+        eventCursor: room.eventCursor,
         players: room.snapshot(),
+        projectiles: room.projectileSnapshot(),
         rules: { ...room.rules },
         stats: stats(),
         inputTiming: { ...peer.timing, queued: peer.inputs.size },
@@ -284,7 +293,16 @@ export async function startServer(port = 3001) {
         cachedTicks = tickSamples.summary();
         lastSummary = start;
       }
-      room.step();
+      const events = room.step();
+      if (events.length)
+        for (const socket of sockets)
+          if (socket.data.joined)
+            send(socket, {
+              type: "events",
+              roomGeneration: room.roomGeneration,
+              tick: room.tick,
+              events,
+            });
       accumulator -= TICK_MS;
       steps++;
       if (room.tick % 3 === 0)

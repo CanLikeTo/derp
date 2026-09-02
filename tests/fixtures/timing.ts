@@ -38,6 +38,12 @@ export async function timingScenario(options: {
     rssMB: 0,
     inBytes: 0,
     outBytes: 0,
+    projectiles: 0,
+    shots: 0,
+    terrainImpacts: 0,
+    playerImpacts: 0,
+    expiredProjectiles: 0,
+    capacityDrops: 0,
   };
   const state = (type: "baseline" | "snapshot"): StateMessage => ({
     rules: { jetsEnabled: false },
@@ -46,7 +52,10 @@ export async function timingScenario(options: {
     serverTime: now + origin,
     playerId: peer.state.id,
     inputEpoch: peer.epoch,
+    roomGeneration: room.roomGeneration,
+    eventCursor: room.eventCursor,
     players: room.snapshot(),
+    projectiles: room.projectileSnapshot(),
     stats,
     inputTiming: { ...emptyInputTiming(), ...peer.timing },
     reason: "virtual clock",
@@ -162,6 +171,7 @@ export async function timingScenario(options: {
               moveX: Math.floor(now / 1000) % 2 ? -1 : 1,
               jumpPressed: false,
               aimQ: peer.state.aimQ,
+              fire: false,
             });
             const generatedAt = now;
             enqueue("up", () => {

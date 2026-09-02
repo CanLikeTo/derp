@@ -32,6 +32,22 @@ type Diagnostic = {
     directionLines: number;
     reticles: number;
     sceneObjects: number;
+    projectileSlots: number;
+    effectSlots: number;
+  };
+  server: { shots: number; playerImpacts: number; capacityDrops: number };
+  combat: {
+    trigger: boolean;
+    predictedCooldown: number;
+    activeProjectiles: number;
+    attempts: number;
+    predictedShots: number;
+    confirmations: number;
+    terrainImpacts: number;
+    playerImpacts: number;
+    eventGaps: number;
+    duplicateEvents: number;
+    provisionals: number;
   };
   corrections: { p95: number };
   aim: {
@@ -70,9 +86,20 @@ async function join(page: Page) {
 async function focus(page: Page) {
   await page.bringToFront();
   await page.locator("#viewport").click({ position: { x: 20, y: 20 } });
-  await expect
-    .poll(async () => (await diagnostics(page)).status)
-    .toContain("movement active");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await expect
+      .poll(async () => (await diagnostics(page)).status)
+      .toContain("movement active");
+    const epoch = (await diagnostics(page)).inputEpoch;
+    await page.waitForTimeout(50);
+    const settled = await diagnostics(page);
+    if (
+      settled.status.includes("movement active") &&
+      settled.inputEpoch === epoch
+    )
+      return;
+  }
+  throw new Error("Playground focus did not settle on a stable input epoch");
 }
 async function setJets(page: Page, enabled: boolean) {
   await focus(page);
@@ -210,6 +237,78 @@ test("mouse aim predicts before authority, survives resize and clears on leave",
   } finally {
     await otherContext.close();
   }
+});
+
+test("automatic carbine predicts immediately and confirms harmless authoritative impacts", async ({
+  page,
+  context,
+}) => {
+  await join(page);
+  const observer = await context.newPage();
+  await join(observer);
+  await page.bringToFront();
+  await page.locator("#debug").focus();
+  const beforeActivation = (await diagnostics(page)).combat.attempts;
+  await page.locator("#viewport").click({ position: { x: 20, y: 20 } });
+  await page.waitForTimeout(50);
+  const initial = await diagnostics(page);
+  expect(initial.combat.attempts).toBe(beforeActivation);
+  expect(initial.renderer).toMatchObject({
+    projectileSlots: 12,
+    effectSlots: 32,
+  });
+  await page.locator("#latency").selectOption("routine");
+  await focus(page);
+  const before = await diagnostics(page);
+  let shotCount = before.combat.predictedShots;
+  let resyncCount = before.resyncs;
+  let confirmed = false;
+  for (let attempt = 0; attempt < 3 && !confirmed; attempt++) {
+    await expect
+      .poll(async () => (await diagnostics(page)).status)
+      .toContain("movement active");
+    const target = (await diagnostics(observer)).predicted!;
+    await aimAtWorld(page, target.x, target.y);
+    await page.mouse.down({ button: "left" });
+    const predictedHandle = await page.waitForFunction((shots) => {
+      const data = window.__derp.diagnostics();
+      return data.combat.predictedShots > shots ? data : false;
+    }, shotCount);
+    const predicted = (await predictedHandle.jsonValue()) as Diagnostic;
+    shotCount = predicted.combat.predictedShots;
+    if (attempt === 0) {
+      expect(predicted.combat.confirmations).toBe(before.combat.confirmations);
+      expect(predicted.server.shots).toBe(before.server.shots);
+    }
+    const outcome = await page.waitForFunction(
+      ({ confirmations, resyncs }) => {
+        const data = window.__derp.diagnostics();
+        if (data.combat.confirmations > confirmations) return "confirmed";
+        if (data.resyncs > resyncs) return "resynchronized";
+        return false;
+      },
+      { confirmations: before.combat.confirmations, resyncs: resyncCount },
+    );
+    confirmed = (await outcome.jsonValue()) === "confirmed";
+    if (!confirmed) {
+      resyncCount = (await diagnostics(page)).resyncs;
+      await page.mouse.up({ button: "left" });
+    }
+  }
+  expect(confirmed).toBe(true);
+  await page.mouse.up({ button: "left" });
+  await expect
+    .poll(async () => (await diagnostics(page)).combat.trigger)
+    .toBe(false);
+  await expect
+    .poll(async () => (await diagnostics(observer)).combat.playerImpacts)
+    .toBeGreaterThan(0);
+  const canvas = (await page.locator("#viewport canvas").boundingBox())!;
+  await page.mouse.move(canvas.x - 5, canvas.y - 5);
+  expect((await diagnostics(page)).combat.trigger).toBe(false);
+  expect((await diagnostics(page)).combat.eventGaps).toBe(0);
+  expect((await diagnostics(page)).server.capacityDrops).toBe(0);
+  await observer.close();
 });
 test("two identities, movement, third rejection, reset and released seat", async ({
   page,

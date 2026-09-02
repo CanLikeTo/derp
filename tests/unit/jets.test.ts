@@ -32,6 +32,12 @@ const stats = {
   rssMB: 0,
   inBytes: 0,
   outBytes: 0,
+  projectiles: 0,
+  shots: 0,
+  terrainImpacts: 0,
+  playerImpacts: 0,
+  expiredProjectiles: 0,
+  capacityDrops: 0,
 };
 
 test("exactly 45 thrust ticks; exhaustion held on the ground cannot refill or relaunch", () => {
@@ -138,6 +144,9 @@ test("restoration and reconciliation preserve fuel and retire thrust commands ex
       serverTime: 0,
       playerId: trace.initial.id,
       inputEpoch: 1,
+      roomGeneration: 1,
+      eventCursor: 0,
+      projectiles: [],
       players: [trace.initial],
       rules: on,
       stats,
@@ -234,6 +243,9 @@ test("remote jet marker uses the interpolated interval, never the newest future 
     serverTime: 0,
     playerId: "local",
     inputEpoch: 1,
+    roomGeneration: 1,
+    eventCursor: 0,
+    projectiles: [],
     players: [
       spawnState("local", 1),
       { ...player, jetActive: true, jetFuelTicksRemaining: 10 },

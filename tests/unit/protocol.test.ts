@@ -28,6 +28,7 @@ test("runtime validation rejects extra authority, wrong types, and bounds", () =
     moveX: 1 as const,
     jumpPressed: false,
     aimQ: 0,
+    fire: false,
   };
   expect(parseClient(JSON.stringify(input))).toEqual(input);
   for (const value of [
@@ -40,10 +41,13 @@ test("runtime validation rejects extra authority, wrong types, and bounds", () =
     { ...input, aimQ: -32769 },
     { ...input, aimQ: 32768 },
     { ...input, aimQ: 1.5 },
+    { ...input, fire: 1 },
   ])
     expect(() => parseClient(JSON.stringify(value))).toThrow();
   const { aimQ: _aimQ, ...missingAim } = input;
   expect(() => parseClient(JSON.stringify(missingAim))).toThrow();
+  const { fire: _fire, ...missingFire } = input;
+  expect(() => parseClient(JSON.stringify(missingFire))).toThrow();
   expect(() => parseClient(" ".repeat(2049))).toThrow();
   expect(() => parseClient("{")).toThrow();
   expect(() => parseServer('{"type":"snapshot"}')).toThrow();
@@ -57,7 +61,10 @@ test("recipient timing payloads require bounded, typed receipts", () => {
     serverTime: 0,
     playerId: "fixture",
     inputEpoch: 1,
+    roomGeneration: 1,
+    eventCursor: 0,
     players: [fixtureTrace().initial],
+    projectiles: [],
     reason: "test",
     inputTiming: emptyInputTiming(),
     stats: {
@@ -71,9 +78,67 @@ test("recipient timing payloads require bounded, typed receipts", () => {
       rssMB: 0,
       inBytes: 0,
       outBytes: 0,
+      projectiles: 0,
+      shots: 0,
+      terrainImpacts: 0,
+      playerImpacts: 0,
+      expiredProjectiles: 0,
+      capacityDrops: 0,
     },
   };
   expect(parseServer(JSON.stringify(baseline))).toEqual(baseline);
+  const events = {
+    type: "events" as const,
+    roomGeneration: 1,
+    tick: 10,
+    events: [
+      {
+        type: "shot" as const,
+        eventId: 1,
+        projectileId: 1,
+        ownerId: "fixture",
+        ownerSlot: 1 as const,
+        sourceInputEpoch: 1,
+        sourceTick: 10,
+        x: 0,
+        y: 1,
+        aimQ: 0,
+      },
+      {
+        type: "impact" as const,
+        eventId: 2,
+        projectileId: 1,
+        target: "terrain" as const,
+        x: 1,
+        y: 1,
+        normalX: -1 as const,
+        normalY: 0 as const,
+      },
+    ],
+  };
+  expect(parseServer(JSON.stringify(events))).toEqual(events);
+  for (const invalid of [
+    { ...events, events: [] },
+    { ...events, events: [{ ...events.events[0], eventId: 0 }] },
+    {
+      ...events,
+      events: [events.events[0], { ...events.events[1], eventId: 3 }],
+    },
+    {
+      ...events,
+      events: [{ ...events.events[0], unexpected: true }],
+    },
+    {
+      ...events,
+      events: [{ ...events.events[1], targetId: "not-allowed" }],
+    },
+  ])
+    expect(() => parseServer(JSON.stringify(invalid))).toThrow();
+  expect(() =>
+    parseServer(
+      JSON.stringify({ type: "rejected", reason: "😀".repeat(5_000) }),
+    ),
+  ).toThrow("too large");
   const receipt = {
     inputEpoch: 1,
     tick: 10,

@@ -1,4 +1,4 @@
-# dERP — local movement and aim playground
+# dERP — local authoritative carbine playground
 
 A responsive, server-authoritative two-player foundation for a deeply unserious arena platformer. This build has two boxes, solid platforms, and useful diagnostics. Explosions come later.
 
@@ -11,7 +11,7 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-Open **http://127.0.0.1:5173** in two windows. Click **Connect** in each, then click the arena to activate it. Move the mouse inside the arena for full 360-degree aim; the local direction and reticle respond through prediction while the other window shows interpolated authoritative aim. A/D or Left/Right moves; Space jumps. Holding Space does not auto-jump. Click **Enable jets · resets both players** to enable the shared jet experiment, then hold either **Shift** key. Fuel lasts 45 simulation ticks (0.75 seconds); release both Shift keys while grounded to refill. Jets start disabled on server startup. You have six ticks (~100 ms) to jump after walking off an edge, and a tap shortly before landing is kept even if you release Space. A third connected player is rejected. Only the focused arena takes input; one keyboard cannot control both windows simultaneously.
+Open **http://127.0.0.1:5173** in two windows. Click **Connect** in each, then click the arena to activate it. Move the mouse for full 360-degree aim and hold the primary mouse button to fire the unlimited automatic carbine. Local shots appear immediately; projectile motion and harmless player/terrain impacts are confirmed by the server. A/D or Left/Right moves; Space jumps. Holding Space does not auto-jump. Click **Enable jets · resets both players** to enable the shared jet experiment, then hold either **Shift** key. Fuel lasts 45 simulation ticks (0.75 seconds); release both Shift keys while grounded to refill. Jets start disabled on server startup. A third connected player is rejected. Only the focused arena takes input.
 
 `Disconnect` releases a seat. `Reconnect` creates a fresh anonymous identity. `Reset playground` resets both players through the server. Selecting a latency preset requests a new timing baseline. The debug ghost is an older authoritative pose, not an error measurement.
 
@@ -31,12 +31,14 @@ Vite reloads browser changes. Restart `bun run dev` after changing server/shared
 | `bun run test:e2e` | Built-preview workflows in Chromium, Firefox, and WebKit |
 | `DERP_MODE=dev bun run test:e2e` | The same workflows against Vite development |
 | `bun run replay` | Replay the built-in movement trace |
+| `bun run replay:combat` | Replay the deterministic two-player projectile-lab trace |
 | `bun run replay path/to/export.json` | Replay a trace or the trace inside a diagnostic export |
 | `bun tools/timing.ts` | Reproduce the frozen/adaptive timing regression and save local evidence |
 | `bun tools/analyze-timing.ts path/to/timing.jsonl` | Correlate soak commands and corrections without comparing clock origins |
 | `bun tools/analyze-heap.ts path/to/file.heapsnapshot` | Summarize local V8 retained-object counts and self sizes |
 | `bun run soak` | 30 minutes, two isolated Chromium clients, movement/reset/rejoin cycles |
 | `bun run soak 1800 --jets --profile-memory` | Full jet acceptance run with held-thrust cycles and retained-memory profiling |
+| `bun run soak 1800 --jets --carbine --profile-memory` | Full carbine acceptance run with deterministic aim/fire/reset/rejoin cycles |
 | `bun run soak 1800 --profile-memory` | Soak plus retained Chromium heap/DOM samples and local heap snapshots |
 | `bun run soak 60` | Short harness rehearsal; not the acceptance soak |
 
@@ -52,7 +54,7 @@ Linux CI may need `bunx playwright install --with-deps chromium firefox webkit`.
 
 ## What is authoritative?
 
-The server owns movement, aim, collisions, jet rules/fuel, player identities, admission, and reset. Clients send one movement/jump/thrust/aim intent for a target server tick, never a position or a client-selected delta-time. Simulation runs at 60 Hz and full snapshots at 20 Hz. Missing commands neutralize movement, jump and thrust while preserving the last authoritative aim. Late input cannot rotate or jump later. A timely press can remain buffered for up to six ticks until a landing.
+The server owns movement, aim, carbine cadence, projectile spawn/motion/collision, jet rules/fuel, player identities, admission, and reset. Clients send one movement/jump/thrust/aim/fire intent for a target server tick, never a position or a client-selected delta-time. Simulation runs at 60 Hz and full snapshots at 20 Hz. Missing commands neutralize movement, jump, thrust, and fire while preserving the last authoritative aim. Late input cannot create a later shot.
 
 Local prediction uses exactly the same simulation code. A snapshot after tick T retires all input through T; the client restores the complete authoritative state and replays subsequent inputs. Position and aim errors are compared at the same tick. Remote players use position and shortest-arc aim interpolation with 100 ms extra buffering beyond estimated transit. Positions and collisions are X/Y only; rendered depth and direction indicators are cosmetic.
 
@@ -60,11 +62,11 @@ Blur/visibility loss clears input, pending prediction and buffered jump intent, 
 
 ## Measurements and limitations
 
-Use **Export diagnostics** to download a bounded local JSON record with timing samples, counters, environment details, and a replayable pending-input trace. The record includes quantized predicted/authoritative aim and angular corrections, pointer validity, renderer resource counts, room rules, jet configuration/fuel/activity, jump windows, remaining-tick counters, per-player input outcomes, and up to 2,400 correlated timing records. Trace version 4 / content `playground-4` is required; older traces are intentionally rejected. Records are not transmitted to analytics. Network presets preserve ordering and apply seeded application-level delay/jitter; they do **not** reproduce TCP packet loss or establish internet fairness.
+Use **Export diagnostics** to download a bounded local JSON record with timing samples, combat/event counters, environment details, and a replayable pending-input trace. It includes projectile/effect resource counts, message-byte maxima, carbine cooldown, aim corrections, room generation/event cursor, room rules, jet state, input outcomes, and correlated timing records. Player traces require version 5 / content `playground-5`; the separate room replay uses `projectile-lab-1`. Records stay local.
 
 Generated test reports and screenshots are under `artifacts/`; each soak writes `report.json`, `timing.jsonl`, screenshots and its log into a unique `artifacts/<build>-soak-<seconds>s-<timestamp>/` directory; Playwright failures also keep traces in `test-results/`. The soak checks queue/entity bounds, error counts, correction and traffic budgets, and post-warm-up memory. Its 32 MiB median-growth alarm is an investigation trigger, not a proof that every leak is absent. Inspect the time series as well as the pass/fail result.
 
-The earlier jump-forgiveness soak exceeded the correction budget (0.1333-unit p95 versus <0.08). The first timing prerequisite build still exceeded that budget. The timestamp-based clock fix now passes both browser matrices and the full 30-minute soak; retained-memory profiling found no accumulating gameplay resources. The fuel-limited jet experiment passed its automated acceptance and has been retained as the current traversal rule. The authoritative aim slice has focused unit/integration and three-engine browser coverage; its soak and human playtest status are recorded separately in `docs/PLAYTEST.md` and `docs/VALIDATION.md`.
+The earlier jump-forgiveness soak exceeded the correction budget (0.1333-unit p95 versus <0.08). The first timing prerequisite build still exceeded that budget. The timestamp-based clock fix now passes both browser matrices and the full 30-minute soak; retained-memory profiling found no accumulating gameplay resources. The fuel-limited jet experiment passed its automated acceptance and has been retained as the current traversal rule. The authoritative aim and carbine slices pass their automated replay, three-engine browser and soak gates; their human playtests remain pending in `docs/PLAYTEST.md` and `docs/VALIDATION.md`.
 
 Two headless test browsers verify behavior and resource trends, not representative GPU performance or simultaneous human fun. Playwright WebKit is not real Safari. Read `docs/VALIDATION.md` for what was actually run and what remains unverified.
 
@@ -77,7 +79,7 @@ The Rapier compatibility build embeds WASM and produces a bundle-size advisory (
 - Shared simulation: canonical room, kinematic movement, state restoration and replay; no DOM/network/server imports.
 - Shared protocol: versions, runtime message validators, limits and measurement helpers.
 
-No auth, lobbies, database, worker IPC, combat, external art/audio, or hosting is included. The Colyseus comparison, full Rapier terrain sweep, and auth/provider/database compatibility investigation remain deferred. This is a scoped foundation plus responsive movement slice, **not completion of all Milestone 0 or Milestone 1 work** in `IDEA.md`.
+No health, damage, death, respawning, scoring, ammo, reloads, weapon switching, auth, lobbies, database, external art/audio, or hosting is included. The carbine is a projectile authority lab, not a complete combat system. The Colyseus comparison, full Rapier terrain sweep, and auth/provider/database compatibility investigation remain deferred.
 
 A Git repository and remote are configured. The CI workflow is provided; remote CI for this change has not been run or verified.
 

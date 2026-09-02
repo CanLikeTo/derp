@@ -6,6 +6,7 @@ import { BUILD_ID, percentile } from "@derp/protocol";
 
 const seconds = Number(process.argv[2] ?? 1800);
 const jets = process.argv.includes("--jets");
+const carbine = process.argv.includes("--carbine");
 const profileMemory = process.argv.includes("--profile-memory");
 const memory: unknown[] = [];
 if (!Number.isInteger(seconds) || seconds < 10 || seconds > 7200)
@@ -56,6 +57,7 @@ const errors: string[] = [];
 const rows: Record<string, unknown>[] = [];
 const timingFile = Bun.file(resolve(runDirectory, "timing.jsonl")).writer();
 const lastSequences = [0, 0];
+const firing = [false, false];
 let resets = 0,
   rejoins = 0;
 const startedAt = new Date().toISOString();
@@ -134,6 +136,18 @@ try {
         arena.x + arena.width * (0.05 + sweep * 0.9),
         arena.y + arena.height * (0.05 + vertical * 0.9),
       );
+      if (carbine) {
+        const nextFiring = step % 6 < 3;
+        if (nextFiring !== firing[i]) {
+          if (nextFiring) await page.mouse.down({ button: "left" });
+          else await page.mouse.up({ button: "left" });
+          firing[i] = nextFiring;
+        }
+        if (step % 17 === i) {
+          await page.mouse.down({ button: "left" });
+          await page.mouse.up({ button: "left" });
+        }
+      }
       await page.keyboard.up(right ? "KeyA" : "KeyD");
       await page.keyboard.down(right ? "KeyD" : "KeyA");
       if (step % 2 === i) await page.keyboard.press("Space");
@@ -157,6 +171,7 @@ try {
         viewport: { width: 1440, height: 1000 },
       });
       pages[1] = page;
+      firing[1] = false;
       lastSequences[1] = 0;
       await join(page);
       rejoins++;
@@ -197,6 +212,11 @@ try {
           client.renderer.directionLines > 2 ||
           client.renderer.directionLines !== client.renderer.players ||
           client.renderer.reticles !== 1 ||
+          client.renderer.projectileSlots !== 12 ||
+          client.renderer.effectSlots !== 32 ||
+          client.combat.provisionals > 16 ||
+          client.combat.activeProjectiles > 12 ||
+          client.combat.eventGaps !== 0 ||
           client.rules.jetsEnabled !== jets
         )
           throw new Error("Resource bound exceeded");
@@ -286,7 +306,7 @@ try {
   const unchanged = sourceHash === (await fingerprint());
   const gates = {
     duration: seconds < 1800 || performance.now() - begin >= 1800000,
-    cycles: seconds < 1800 || resets + rejoins >= 20,
+    cycles: seconds < 1800 || (resets >= 30 && rejoins >= 30),
     errors: errors.length === 0,
     sourceUnchanged: unchanged,
     tick: budgets.tickP95 <= 8 && budgets.tickP99 <= 12,
@@ -299,13 +319,27 @@ try {
         clients.some((d) => d.correctionsByActivity.thrust.count > 0)),
     bandwidth: budgets.upstreamBps <= 8000 && budgets.downstreamBps <= 64000,
     memory: growthMB < 32,
+    combat:
+      !carbine ||
+      clients.every(
+        (client) =>
+          client.server.capacityDrops === 0 &&
+          client.combat.eventGaps === 0 &&
+          client.combat.duplicateEvents === 0 &&
+          client.combat.provisionals <= 16 &&
+          client.combat.activeProjectiles <= 12 &&
+          client.messageBytes.maxIncoming <= 16384 &&
+          client.messageBytes.maxOutgoing <= 2048,
+      ),
     renderer: clients.every(
       (client) =>
-        client.renderer.sceneObjects <= 18 &&
-        client.renderer.geometries <= 11 &&
+        client.renderer.sceneObjects <= 64 &&
+        client.renderer.geometries <= 13 &&
         client.renderer.directionLines === client.renderer.players &&
         client.renderer.reticles === 1 &&
-        client.renderer.programs <= 3,
+        client.renderer.projectileSlots === 12 &&
+        client.renderer.effectSlots === 32 &&
+        client.renderer.programs <= 6,
     ),
   };
   report = {
@@ -317,6 +351,7 @@ try {
     requestedSeconds: seconds,
     profileMemory,
     jets,
+    carbine,
     resets,
     rejoins,
     sourceHash,
@@ -349,6 +384,7 @@ try {
     requestedSeconds: seconds,
     profileMemory,
     jets,
+    carbine,
     sourceHash,
     resets,
     rejoins,

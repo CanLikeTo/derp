@@ -4,14 +4,15 @@ import {
   JETS,
   AIM_MIN,
   AIM_MAX,
+  CARBINE,
   type RoomRules,
   TRACE_VERSION,
   type Trace,
   type PlayerState,
 } from "@derp/simulation";
 export { CONTENT_VERSION };
-export const PROTOCOL_VERSION = 5;
-export const BUILD_ID = "playground-aim-v1";
+export const PROTOCOL_VERSION = 6;
+export const BUILD_ID = "playground-carbine-lab-v1";
 export const LIMITS = {
   messageBytes: 2048,
   futureTicks: 16,
@@ -20,6 +21,8 @@ export const LIMITS = {
   bufferedBytes: 65536,
   rate: 120,
   burst: 120,
+  serverMessageBytes: 16_384,
+  eventBatch: 16,
 } as const;
 export type InputFrame = {
   type: "input";
@@ -29,6 +32,7 @@ export type InputFrame = {
   jumpPressed: boolean;
   jetHeld: boolean;
   aimQ: number;
+  fire: boolean;
 };
 export type ClientMessage =
   | { type: "setJets"; inputEpoch: number; enabled: boolean }
@@ -47,6 +51,12 @@ export type ServerStats = {
   rssMB: number;
   inBytes: number;
   outBytes: number;
+  projectiles: number;
+  shots: number;
+  terrainImpacts: number;
+  playerImpacts: number;
+  expiredProjectiles: number;
+  capacityDrops: number;
 };
 export type InputReceipt = {
   inputEpoch: number;
@@ -77,14 +87,58 @@ export type StateMessage = {
   serverTime: number;
   playerId: string;
   inputEpoch: number;
+  roomGeneration: number;
+  eventCursor: number;
   players: PlayerState[];
+  projectiles: ProjectileView[];
   rules: RoomRules;
   stats: ServerStats;
   inputTiming: InputTiming;
   reason: string;
 };
+export type ProjectileView = {
+  id: number;
+  ownerSlot: 1 | 2;
+  x: number;
+  y: number;
+  aimQ: number;
+};
+export type ShotEvent = {
+  type: "shot";
+  eventId: number;
+  projectileId: number;
+  ownerId: string;
+  ownerSlot: 1 | 2;
+  sourceInputEpoch: number;
+  sourceTick: number;
+  x: number;
+  y: number;
+  aimQ: number;
+};
+export type TerrainImpactEvent = {
+  type: "impact";
+  eventId: number;
+  projectileId: number;
+  target: "terrain";
+  x: number;
+  y: number;
+  normalX: -1 | 0 | 1;
+  normalY: -1 | 0 | 1;
+};
+export type PlayerImpactEvent = Omit<TerrainImpactEvent, "target"> & {
+  target: "player";
+  targetId: string;
+};
+export type CombatEvent = ShotEvent | TerrainImpactEvent | PlayerImpactEvent;
+export type EventBatch = {
+  type: "events";
+  roomGeneration: number;
+  tick: number;
+  events: CombatEvent[];
+};
 export type ServerMessage =
   | StateMessage
+  | EventBatch
   | { type: "pong"; nonce: number; tick: number; serverTime: number }
   | { type: "rejected"; reason: string };
 
@@ -137,13 +191,15 @@ export function parseClient(raw: string): ClientMessage {
           "jumpPressed",
           "jetHeld",
           "aimQ",
+          "fire",
         ]) &&
         integer(value.inputEpoch) &&
         integer(value.tick) &&
         [-1, 0, 1].includes(value.moveX as number) &&
         typeof value.jumpPressed === "boolean" &&
         typeof value.jetHeld === "boolean" &&
-        aim(value.aimQ)
+        aim(value.aimQ) &&
+        typeof value.fire === "boolean"
       )
         return value as InputFrame;
       break;
@@ -184,6 +240,7 @@ export function validPlayer(value: unknown): value is PlayerState {
       "jetFuelTicksRemaining",
       "jetActive",
       "aimQ",
+      "carbineCooldownTicksRemaining",
     ]) &&
     text(value.id) &&
     [1, 2].includes(value.slot as number) &&
@@ -196,7 +253,92 @@ export function validPlayer(value: unknown): value is PlayerState {
     integer(value.jetFuelTicksRemaining) &&
     value.jetFuelTicksRemaining <= JETS.fuelTicks &&
     typeof value.jetActive === "boolean" &&
+    aim(value.aimQ) &&
+    integer(value.carbineCooldownTicksRemaining) &&
+    value.carbineCooldownTicksRemaining <= CARBINE.cooldownTicks
+  );
+}
+
+function validProjectile(value: unknown): value is ProjectileView {
+  return (
+    record(value) &&
+    keys(value, ["id", "ownerSlot", "x", "y", "aimQ"]) &&
+    integer(value.id) &&
+    value.id > 0 &&
+    [1, 2].includes(value.ownerSlot as number) &&
+    number(value.x) &&
+    number(value.y) &&
     aim(value.aimQ)
+  );
+}
+
+function validCombatEvent(value: unknown): value is CombatEvent {
+  if (!record(value)) return false;
+  if (value.type === "shot")
+    return (
+      keys(value, [
+        "type",
+        "eventId",
+        "projectileId",
+        "ownerId",
+        "ownerSlot",
+        "sourceInputEpoch",
+        "sourceTick",
+        "x",
+        "y",
+        "aimQ",
+      ]) &&
+      integer(value.eventId) &&
+      value.eventId > 0 &&
+      integer(value.projectileId) &&
+      value.projectileId > 0 &&
+      text(value.ownerId) &&
+      [1, 2].includes(value.ownerSlot as number) &&
+      integer(value.sourceInputEpoch) &&
+      integer(value.sourceTick) &&
+      number(value.x) &&
+      number(value.y) &&
+      aim(value.aimQ)
+    );
+  if (value.type !== "impact") return false;
+  const normal = (input: unknown) => [-1, 0, 1].includes(input as number);
+  const base =
+    integer(value.eventId) &&
+    value.eventId > 0 &&
+    integer(value.projectileId) &&
+    value.projectileId > 0 &&
+    number(value.x) &&
+    number(value.y) &&
+    normal(value.normalX) &&
+    normal(value.normalY);
+  if (value.target === "terrain")
+    return (
+      keys(value, [
+        "type",
+        "eventId",
+        "projectileId",
+        "target",
+        "x",
+        "y",
+        "normalX",
+        "normalY",
+      ]) && base
+    );
+  return (
+    value.target === "player" &&
+    keys(value, [
+      "type",
+      "eventId",
+      "projectileId",
+      "target",
+      "targetId",
+      "x",
+      "y",
+      "normalX",
+      "normalY",
+    ]) &&
+    base &&
+    text(value.targetId)
   );
 }
 function validInputTiming(value: unknown): value is InputTiming {
@@ -241,7 +383,8 @@ export function validRules(value: unknown): value is RoomRules {
   );
 }
 export function parseServer(raw: string): ServerMessage {
-  if (raw.length > 16384) throw new Error("Server message too large");
+  if (new TextEncoder().encode(raw).byteLength > LIMITS.serverMessageBytes)
+    throw new Error("Server message too large");
   const value: unknown = JSON.parse(raw);
   if (!record(value)) throw new Error("Invalid server message");
   if (
@@ -259,6 +402,21 @@ export function parseServer(raw: string): ServerMessage {
   )
     return value as ServerMessage;
   if (
+    value.type === "events" &&
+    keys(value, ["type", "roomGeneration", "tick", "events"]) &&
+    integer(value.roomGeneration) &&
+    integer(value.tick) &&
+    Array.isArray(value.events) &&
+    value.events.length > 0 &&
+    value.events.length <= LIMITS.eventBatch &&
+    value.events.every(validCombatEvent) &&
+    (value.events as CombatEvent[]).every(
+      (event, index) =>
+        event.eventId === (value.events as CombatEvent[])[0]!.eventId + index,
+    )
+  )
+    return value as EventBatch;
+  if (
     (value.type === "baseline" || value.type === "snapshot") &&
     keys(value, [
       "type",
@@ -266,7 +424,10 @@ export function parseServer(raw: string): ServerMessage {
       "serverTime",
       "playerId",
       "inputEpoch",
+      "roomGeneration",
+      "eventCursor",
       "players",
+      "projectiles",
       "rules",
       "stats",
       "inputTiming",
@@ -274,12 +435,17 @@ export function parseServer(raw: string): ServerMessage {
     ]) &&
     integer(value.tick) &&
     integer(value.inputEpoch) &&
+    integer(value.roomGeneration) &&
+    integer(value.eventCursor) &&
     number(value.serverTime) &&
     text(value.playerId) &&
     text(value.reason) &&
     Array.isArray(value.players) &&
     value.players.length <= 2 &&
     value.players.every(validPlayer) &&
+    Array.isArray(value.projectiles) &&
+    value.projectiles.length <= CARBINE.roomProjectileCap &&
+    value.projectiles.every(validProjectile) &&
     record(value.stats) &&
     validInputTiming(value.inputTiming) &&
     validRules(value.rules)
@@ -295,6 +461,12 @@ export function parseServer(raw: string): ServerMessage {
       "rssMB",
       "inBytes",
       "outBytes",
+      "projectiles",
+      "shots",
+      "terrainImpacts",
+      "playerImpacts",
+      "expiredProjectiles",
+      "capacityDrops",
     ];
     if (
       keys(value.stats, fields) &&
@@ -303,6 +475,8 @@ export function parseServer(raw: string): ServerMessage {
       ) &&
       new Set(value.players.map((player) => player.id)).size ===
         value.players.length &&
+      new Set(value.projectiles.map((projectile) => projectile.id)).size ===
+        value.projectiles.length &&
       value.players.some((player) => player.id === value.playerId)
     )
       return value as StateMessage;
@@ -348,11 +522,12 @@ export function parseTrace(value: unknown): Trace {
     !value.inputs.every(
       (input) =>
         record(input) &&
-        keys(input, ["moveX", "jumpPressed", "jetHeld", "aimQ"]) &&
+        keys(input, ["moveX", "jumpPressed", "jetHeld", "aimQ", "fire"]) &&
         [-1, 0, 1].includes(input.moveX as number) &&
         typeof input.jumpPressed === "boolean" &&
         typeof input.jetHeld === "boolean" &&
-        aim(input.aimQ),
+        aim(input.aimQ) &&
+        typeof input.fire === "boolean",
     )
   )
     throw new Error("Invalid or incompatible trace");

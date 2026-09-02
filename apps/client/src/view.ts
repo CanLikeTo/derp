@@ -2,10 +2,13 @@ import * as THREE from "three";
 import {
   ROOM,
   MOVEMENT,
+  CARBINE,
   aimQToRadians,
   type PlayerState,
 } from "@derp/simulation";
+import type { ProjectileView } from "@derp/protocol";
 import type { WorldPoint } from "./input";
+import type { EffectView } from "./combat";
 export class View {
   renderer: THREE.WebGLRenderer;
   scene = new THREE.Scene();
@@ -61,6 +64,44 @@ export class View {
     ]),
     new THREE.LineBasicMaterial({ color: "#f7f7e9" }),
   );
+  private projectileGeometry = new THREE.BoxGeometry(
+    CARBINE.halfExtent * 2,
+    CARBINE.halfExtent * 2,
+    0.12,
+  );
+  private projectileMaterials = [
+    new THREE.MeshBasicMaterial({ color: "#dcff63" }),
+    new THREE.MeshBasicMaterial({ color: "#ff916c" }),
+  ];
+  private projectileMeshes = Array.from(
+    { length: CARBINE.roomProjectileCap },
+    () => new THREE.Mesh(this.projectileGeometry, this.projectileMaterials[0]),
+  );
+  private effectGeometry = new THREE.RingGeometry(0.08, 0.2, 8);
+  private effectMaterials = {
+    muzzle: new THREE.MeshBasicMaterial({
+      color: "#fff5a8",
+      transparent: true,
+      opacity: 0.9,
+      side: THREE.DoubleSide,
+    }),
+    terrain: new THREE.MeshBasicMaterial({
+      color: "#f7f7e9",
+      transparent: true,
+      opacity: 0.8,
+      side: THREE.DoubleSide,
+    }),
+    player: new THREE.MeshBasicMaterial({
+      color: "#ff577f",
+      transparent: true,
+      opacity: 0.9,
+      side: THREE.DoubleSide,
+    }),
+  };
+  private effectMeshes = Array.from(
+    { length: CARBINE.effectPoolSize },
+    () => new THREE.Mesh(this.effectGeometry, this.effectMaterials.terrain),
+  );
   private observer: ResizeObserver;
   constructor(private host: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -99,6 +140,10 @@ export class View {
       this.reticle,
       this.outlines,
     );
+    for (const mesh of [...this.projectileMeshes, ...this.effectMeshes]) {
+      mesh.visible = false;
+      this.scene.add(mesh);
+    }
     this.ghost.visible = false;
     this.ghostDirection.visible = false;
     this.reticle.visible = false;
@@ -118,6 +163,8 @@ export class View {
     debug: boolean,
     reticleTarget?: WorldPoint,
     reticleVisible = false,
+    projectiles: ProjectileView[] = [],
+    effects: EffectView[] = [],
   ) {
     const ids = new Set(players.map((player) => player.id));
     for (const [id, mesh] of this.meshes)
@@ -170,6 +217,31 @@ export class View {
     this.reticle.visible = reticleVisible && !!reticleTarget;
     if (reticleTarget)
       this.reticle.position.set(reticleTarget.x, reticleTarget.y, 1.2);
+    for (let index = 0; index < this.projectileMeshes.length; index++) {
+      const mesh = this.projectileMeshes[index]!;
+      const projectile = projectiles[index];
+      mesh.visible = !!projectile;
+      if (projectile) {
+        mesh.material = this.projectileMaterials[projectile.ownerSlot - 1]!;
+        mesh.position.set(projectile.x, projectile.y, 1.05);
+        mesh.rotation.z = aimQToRadians(projectile.aimQ);
+      }
+    }
+    for (let index = 0; index < this.effectMeshes.length; index++) {
+      const mesh = this.effectMeshes[index]!;
+      const effect = effects[index];
+      mesh.visible = !!effect;
+      if (effect) {
+        mesh.material =
+          effect.kind === "muzzle"
+            ? this.effectMaterials.muzzle
+            : effect.kind === "impact-player"
+              ? this.effectMaterials.player
+              : this.effectMaterials.terrain;
+        mesh.position.set(effect.x, effect.y, 1.15);
+        mesh.rotation.z = Math.atan2(effect.normalY, effect.normalX);
+      }
+    }
     this.renderer.render(this.scene, this.camera);
   }
   counts() {
@@ -194,6 +266,11 @@ export class View {
       players: this.meshes.size,
       directionLines: this.directions.size,
       reticles: 1,
+      projectileSlots: this.projectileMeshes.length,
+      visibleProjectiles: this.projectileMeshes.filter((mesh) => mesh.visible)
+        .length,
+      effectSlots: this.effectMeshes.length,
+      visibleEffects: this.effectMeshes.filter((mesh) => mesh.visible).length,
       labels: this.labels.size,
       geometries: this.renderer.info.memory.geometries,
       trackedGeometries: geometries.size,

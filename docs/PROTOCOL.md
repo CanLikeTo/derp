@@ -9,22 +9,32 @@ For later releases, change the protocol version when message semantics become in
 The browser sends a hello after the WebSocket opens:
 
 ```json
-{"type":"hello","protocol":5,"content":"playground-4"}
+{"type":"hello","protocol":6,"content":"playground-5"}
 ```
 
 Only the server chooses the player UUID and slot. A compatible hello either receives a `baseline`, or a `rejected` message followed by closure. There are two player seats and eight total pending/live socket slots. Sending input before admission is invalid.
 
-A baseline contains `tick`, `serverTime`, `playerId`, `inputEpoch`, complete `players`, `rules`, recipient `inputTiming`, diagnostic `stats`, and a human-readable `reason`. Each player contains `id`, `slot`, `x`, `y`, `vx`, `vy`, `grounded`, `coyoteTicksRemaining`, `jumpBufferTicksRemaining`, `jetFuelTicksRemaining`, `jetActive`, and `aimQ`. Room rules accompany every state message. Times use the server's monotonic clock; browser and server clock origins must not be compared directly.
+A baseline contains `tick`, `serverTime`, `playerId`, `inputEpoch`, `roomGeneration`, `eventCursor`, complete `players`, complete live `projectiles`, `rules`, recipient `inputTiming`, diagnostic `stats`, and a human-readable `reason`. Player replay state adds `carbineCooldownTicksRemaining`. Room rules accompany every state message.
 
 Before enabling movement, the client measures three round trips, then requests a fresh baseline. Changing latency during admission restarts the connection if a first baseline has not arrived. This prevents clearing a delayed hello without replacing it.
 
 ## Input and finalized time
 
 ```json
-{"type":"input","inputEpoch":7,"tick":121,"moveX":1,"jumpPressed":false,"jetHeld":false,"aimQ":8192}
+{"type":"input","inputEpoch":7,"tick":121,"moveX":1,"jumpPressed":false,"jetHeld":false,"aimQ":8192,"fire":true}
 ```
 
-An input is one tick of intent. `moveX` is exactly -1, 0 or 1. The jump flag is a press edge, not a held button. `aimQ` is a required signed 16-bit integer: 0 points right, 16384 up, -32768 left and -16384 down. Clients cannot send elapsed time, positions, velocities, cursor coordinates or a target player. Unknown fields are rejected.
+An input is one tick of intent. `moveX` is exactly -1, 0 or 1. The jump flag is a press edge, `fire` is held automatic intent, and `aimQ` is a required signed 16-bit direction. Clients cannot send elapsed time, positions, velocities, cursor coordinates, projectile state, or a target player. Unknown fields are rejected.
+
+## Authoritative carbine (protocol 6 / content playground-5 / trace 5)
+
+The server decrements the replayed carbine cooldown before evaluating each tick. Held fire authorizes shots at S, S+10, S+20, giving six shots per second. Missing, suspended, retired, invalid, or obsolete input means `fire=false`; taps received while cooldown is active are not queued. The room caps live projectiles at 12 and still consumes cooldown when that cap rejects a legal attempt.
+
+Projectiles travel 36 units/second for at most 45 movement ticks. The authoritative room advances existing projectiles, performs swept tests against expanded terrain and moving non-owner player AABBs, resolves impacts, then spawns newly authorized shots. Earliest collision wins; equal-time terrain wins before terrain index and player slot/ID. Hits are visual only. Projectile-to-projectile and owner collisions are ignored.
+
+Shot and impact events use ordered nonreplaceable `events` batches with contiguous IDs. State messages carry the current event cursor and full projectile list. Clients ignore duplicates and old generations and resynchronize on gaps or a snapshot cursor ahead of processed events. Reset and jet-mode changes advance `roomGeneration`, clear combat state, and reset projectile/event IDs. Ordinary baselines preserve the current generation and live authoritative projectiles.
+
+The local client predicts authorized shots immediately and checks only static terrain. It never predicts a player hit. A shot event matches provisional work by generation, owner, input epoch, and source tick; only an authoritative impact produces an impact cue. Remote projectiles use the same historical render time as remote players without extrapolation. Build ID: `playground-carbine-lab-v1`; the separate room replay is `projectile-lab-1`.
 
 For current server tick T, only ticks T+1 through T+16 are accepted. The first valid input for a player's tick wins. Duplicates, expired inputs and old epochs cannot change already simulated time. Missing input at a tick means zero horizontal intent, no new jump press and neutral jet intent while retaining the player's last aim; gravity, collision and already-authoritative jump timers still run. A grounded neutral tick can recharge fuel. Input arrival never advances the room clock.
 

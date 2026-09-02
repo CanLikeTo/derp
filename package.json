@@ -17,6 +17,7 @@
     "test:e2e": "bun run build && playwright test",
     "soak": "bun run build && bun tools/soak.ts",
     "replay": "bun tools/replay.ts",
+    "replay:combat": "bun tools/replay.ts --combat",
     "compat": "bun tools/compat.ts"
   },
   "devDependencies": {

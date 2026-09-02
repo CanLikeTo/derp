@@ -103,6 +103,7 @@ test("live reset replaces epochs, stale input ignored, flood rejected", async ()
       moveX: 1,
       jumpPressed: true,
       aimQ: 0,
+      fire: false,
     }),
   );
   for (let i = 0; i < 180; i++) {
@@ -132,6 +133,7 @@ test("far-future and oversized traffic cannot retain a seat", async () => {
       moveX: 1,
       jumpPressed: true,
       aimQ: 0,
+      fire: false,
     }),
   );
   await delay(50);
@@ -202,6 +204,60 @@ test("old protocol/content versions are explicitly rejected", async () => {
     const client = await connect(hello);
     expect(client.messages[0]?.type).toBe("rejected");
     client.socket.close();
+  }
+});
+
+test("automatic carbine emits an ordered authoritative shot and harmless player impact", async () => {
+  await delay(80);
+  const a = await connect();
+  const b = await connect();
+  try {
+    const baseline = a.messages[0];
+    if (baseline?.type !== "baseline") throw new Error("No baseline");
+    a.socket.send(
+      JSON.stringify({
+        type: "input",
+        inputEpoch: baseline.inputEpoch,
+        tick: baseline.tick + 8,
+        moveX: 0,
+        jumpPressed: false,
+        jetHeld: false,
+        aimQ: 0,
+        fire: true,
+      }),
+    );
+    await delay(900);
+    const combat = a.messages.flatMap((message) =>
+      message.type === "events" ? message.events : [],
+    );
+    const shot = combat.find((event) => event.type === "shot");
+    const impact = combat.find(
+      (event) => event.type === "impact" && event.target === "player",
+    );
+    expect(shot).toMatchObject({
+      type: "shot",
+      ownerId: baseline.playerId,
+      sourceTick: baseline.tick + 8,
+    });
+    expect(impact).toMatchObject({
+      type: "impact",
+      projectileId: shot?.projectileId,
+      target: "player",
+    });
+    expect(combat.map((event) => event.eventId)).toEqual(
+      combat.map((_, index) => index + 1),
+    );
+    const latest = a.messages
+      .filter((message) => message.type === "snapshot")
+      .at(-1);
+    expect(latest?.type).toBe("snapshot");
+    if (latest?.type === "snapshot") {
+      expect(latest.eventCursor).toBe(combat.at(-1)!.eventId);
+      expect(latest.players).toHaveLength(2);
+    }
+  } finally {
+    a.socket.close();
+    b.socket.close();
   }
 });
 test("global overrun baselines clear both buffered intentions before either send", async () => {

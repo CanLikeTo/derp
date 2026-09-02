@@ -7,7 +7,7 @@ test("queue reports browser scheduling lateness before delivering the delayed me
   const events: string[] = [];
   let lateness = 0;
   const queue = new DelayQueue(
-    "local",
+    "routine",
     () => {},
     (value) => {
       lateness = value;
@@ -16,7 +16,7 @@ test("queue reports browser scheduling lateness before delivering the delayed me
   );
   try {
     queue.enqueue(() => events.push("delivered"));
-    Bun.sleepSync(30);
+    Bun.sleepSync(80);
     await delay(10);
     expect(lateness).toBeGreaterThanOrEqual(20);
     expect(events).toEqual(["measured", "delivered"]);
@@ -56,6 +56,23 @@ test("delayed-input flood cannot retain unbounded work or execute old commands",
     expect(queue.size).toBe(0);
     await delay(150);
     expect(delivered).toBe(0);
+  } finally {
+    queue.clear();
+  }
+});
+
+test("a scheduling observer can retire stale delayed work before it executes", async () => {
+  let delivered = 0;
+  const queue = new DelayQueue(
+    "routine",
+    () => {},
+    () => false,
+  );
+  try {
+    queue.enqueue(() => delivered++);
+    await delay(100);
+    expect(delivered).toBe(0);
+    expect(queue.size).toBe(0);
   } finally {
     queue.clear();
   }

@@ -31,6 +31,12 @@ const stats = {
   rssMB: 0,
   inBytes: 0,
   outBytes: 0,
+  projectiles: 0,
+  shots: 0,
+  terrainImpacts: 0,
+  playerImpacts: 0,
+  expiredProjectiles: 0,
+  capacityDrops: 0,
 };
 
 test("signed aim math covers cardinals, wrapping and deterministic antipodes", () => {
@@ -104,6 +110,9 @@ test("authority preserves missing aim, accepts one value and reconciliation reti
     serverTime: 0,
     playerId: "a",
     inputEpoch: peer.epoch,
+    roomGeneration: 1,
+    eventCursor: 0,
+    projectiles: [],
     players: room.snapshot(),
     rules: { jetsEnabled: false },
     stats,
@@ -141,6 +150,9 @@ test("remote aim uses the same historical interval and shortest arc as position"
     serverTime: 0,
     playerId: local.id,
     inputEpoch: 1,
+    roomGeneration: 1,
+    eventCursor: 0,
+    projectiles: [],
     players: [local, remote],
     rules: { jetsEnabled: false },
     stats,

@@ -2,8 +2,8 @@ import RAPIER from "@dimforge/rapier2d-compat";
 
 export const DT = 1 / 60;
 export const TICK_MS = 1000 / 60;
-export const CONTENT_VERSION = "playground-4";
-export const TRACE_VERSION = 4;
+export const CONTENT_VERSION = "playground-5";
+export const TRACE_VERSION = 5;
 export const AIM_STEPS = 65_536;
 export const AIM_HALF_TURN = AIM_STEPS / 2;
 export const AIM_QUARTER_TURN = AIM_STEPS / 4;
@@ -27,6 +27,18 @@ export const JETS = {
   upwardSpeed: 12,
   refillPerTick: 1,
 } as const;
+export const CARBINE = {
+  cooldownTicks: 10,
+  speed: 36,
+  lifetimeTicks: 45,
+  halfExtent: 0.08,
+  roomProjectileCap: 12,
+  provisionalProjectileCap: 16,
+  muzzleFlashTicks: 6,
+  impactTicks: 9,
+  effectPoolSize: 32,
+  collisionEpsilon: 1e-9,
+} as const;
 export type RoomRules = { jetsEnabled: boolean };
 export const DISABLED_RULES: RoomRules = { jetsEnabled: false };
 export type Input = {
@@ -34,12 +46,14 @@ export type Input = {
   jumpPressed: boolean;
   jetHeld: boolean;
   aimQ: number;
+  fire: boolean;
 };
 export const neutralInput = (aimQ: number): Input => ({
   moveX: 0,
   jumpPressed: false,
   jetHeld: false,
   aimQ: wrapAimQ(aimQ),
+  fire: false,
 });
 // Convenient zero-angle fixture. Runtime neutral ticks must use neutralInput(state.aimQ).
 export const NEUTRAL: Input = neutralInput(0);
@@ -56,6 +70,7 @@ export type PlayerState = {
   jetFuelTicksRemaining: number;
   jetActive: boolean;
   aimQ: number;
+  carbineCooldownTicksRemaining: number;
 };
 export const ROOM = {
   width: 24,
@@ -123,8 +138,119 @@ export function spawnState(id: string, slot: 1 | 2): PlayerState {
     jetFuelTicksRemaining: JETS.fuelTicks,
     jetActive: false,
     aimQ: slot === 1 ? 0 : AIM_MIN,
+    carbineCooldownTicksRemaining: 0,
   };
 }
+
+export type Point = { x: number; y: number };
+export type Aabb = { x: number; y: number; width: number; height: number };
+export type SweepHit = {
+  toi: number;
+  x: number;
+  y: number;
+  normalX: -1 | 0 | 1;
+  normalY: -1 | 0 | 1;
+};
+
+/** Deterministic segment/AABB slab query used by authoritative projectiles. */
+export function sweepSegmentAabb(
+  start: Point,
+  end: Point,
+  box: Aabb,
+  expand = 0,
+): SweepHit | undefined {
+  const minX = box.x - box.width / 2 - expand;
+  const maxX = box.x + box.width / 2 + expand;
+  const minY = box.y - box.height / 2 - expand;
+  const maxY = box.y + box.height / 2 + expand;
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  let enter = 0;
+  let exit = 1;
+  let normalX: -1 | 0 | 1 = 0;
+  let normalY: -1 | 0 | 1 = 0;
+  const axis = (
+    origin: number,
+    delta: number,
+    min: number,
+    max: number,
+    xAxis: boolean,
+  ) => {
+    if (Math.abs(delta) <= Number.EPSILON)
+      return origin >= min && origin <= max;
+    let near = (min - origin) / delta;
+    let far = (max - origin) / delta;
+    let sign: -1 | 1 = -1;
+    if (near > far) {
+      [near, far] = [far, near];
+      sign = 1;
+    }
+    if (near > enter) {
+      enter = near;
+      if (xAxis) {
+        normalX = sign;
+        normalY = 0;
+      } else {
+        normalX = 0;
+        normalY = sign;
+      }
+    }
+    exit = Math.min(exit, far);
+    return enter <= exit;
+  };
+  if (!axis(start.x, dx, minX, maxX, true)) return;
+  if (!axis(start.y, dy, minY, maxY, false)) return;
+  if (exit < 0 || enter > 1) return;
+  const inside =
+    start.x >= minX && start.x <= maxX && start.y >= minY && start.y <= maxY;
+  if (inside) {
+    enter = 0;
+    if (Math.abs(dx) >= Math.abs(dy) && dx !== 0) {
+      normalX = dx > 0 ? -1 : 1;
+      normalY = 0;
+    } else if (dy !== 0) {
+      normalX = 0;
+      normalY = dy > 0 ? -1 : 1;
+    } else {
+      normalX = 0;
+      normalY = 1;
+    }
+  }
+  const toi = Math.max(0, enter);
+  return {
+    toi,
+    x: start.x + dx * toi,
+    y: start.y + dy * toi,
+    normalX,
+    normalY,
+  };
+}
+
+export function aimUnitVector(aimQ: number): Point {
+  const angle = aimQToRadians(aimQ);
+  return { x: Math.cos(angle), y: Math.sin(angle) };
+}
+
+export function carbineMuzzle(
+  state: Pick<PlayerState, "x" | "y" | "aimQ">,
+): Point {
+  const direction = aimUnitVector(state.aimQ);
+  const tx =
+    Math.abs(direction.x) < Number.EPSILON
+      ? Infinity
+      : MOVEMENT.width / 2 / Math.abs(direction.x);
+  const ty =
+    Math.abs(direction.y) < Number.EPSILON
+      ? Infinity
+      : MOVEMENT.height / 2 / Math.abs(direction.y);
+  const distance = Math.min(tx, ty) + CARBINE.halfExtent + MOVEMENT.margin;
+  return {
+    x: state.x + direction.x * distance,
+    y: state.y + direction.y * distance,
+  };
+}
+
+export type StepResult = { state: PlayerState; shotAuthorized: boolean };
 
 // Each controller sees only immutable terrain. Players intentionally never block one another.
 export class Simulation {
@@ -151,7 +277,11 @@ export class Simulation {
     this.world.timestep = DT;
     this.world.step();
   }
-  step(state: PlayerState, input: Input, rules: RoomRules): PlayerState {
+  stepWithActions(
+    state: PlayerState,
+    input: Input,
+    rules: RoomRules,
+  ): StepResult {
     this.collider.setTranslation({ x: state.x, y: state.y });
     // Refresh broad phase after restoring a prediction snapshot, including teleports.
     this.world.step();
@@ -221,19 +351,29 @@ export class Simulation {
     else coyote = Math.max(0, coyote - 1);
     if (rules.jetsEnabled && grounded && !input.jetHeld)
       fuel = Math.min(JETS.fuelTicks, fuel + JETS.refillPerTick);
+    let cooldown = Math.max(0, state.carbineCooldownTicksRemaining - 1);
+    const shotAuthorized = input.fire && cooldown === 0;
+    if (shotAuthorized) cooldown = CARBINE.cooldownTicks;
     return {
-      ...state,
-      aimQ: wrapAimQ(input.aimQ),
-      x: state.x + horizontal.x + vertical.x,
-      y: state.y + horizontal.y + vertical.y,
-      vx: resolvedVx,
-      vy: resolvedVy,
-      grounded,
-      coyoteTicksRemaining: coyote,
-      jumpBufferTicksRemaining: Math.max(0, buffer - 1),
-      jetFuelTicksRemaining: fuel,
-      jetActive,
+      shotAuthorized,
+      state: {
+        ...state,
+        aimQ: wrapAimQ(input.aimQ),
+        x: state.x + horizontal.x + vertical.x,
+        y: state.y + horizontal.y + vertical.y,
+        vx: resolvedVx,
+        vy: resolvedVy,
+        grounded,
+        coyoteTicksRemaining: coyote,
+        jumpBufferTicksRemaining: Math.max(0, buffer - 1),
+        jetFuelTicksRemaining: fuel,
+        jetActive,
+        carbineCooldownTicksRemaining: cooldown,
+      },
     };
+  }
+  step(state: PlayerState, input: Input, rules: RoomRules): PlayerState {
+    return this.stepWithActions(state, input, rules).state;
   }
   dispose() {
     this.world.free();
@@ -253,6 +393,7 @@ export function fixtureTrace(): Trace {
     jumpPressed: tick % 45 === 10,
     jetHeld: false,
     aimQ: wrapAimQ(tick * 193),
+    fire: tick % 10 === 0,
   }));
   return {
     version: TRACE_VERSION,

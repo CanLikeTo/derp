@@ -11,18 +11,23 @@ export class DelayQueue {
   constructor(
     public preset: Preset,
     private overflow: () => void,
-    private delayed?: (lateness: number) => void,
+    private delayed?: (lateness: number) => boolean | void,
   ) {}
   get size() {
     return this.queue.length;
   }
   enqueue(run: () => void) {
+    const config = PRESETS[this.preset];
+    if (config.delay === 0 && config.jitter === 0 && !this.queue.length) {
+      this.delayed?.(0);
+      run();
+      return;
+    }
     if (this.queue.length >= 256) {
       this.clear();
       this.overflow();
       return;
     }
-    const config = PRESETS[this.preset];
     this.seed = (1664525 * this.seed + 1013904223) >>> 0;
     const jitter = ((this.seed / 0x100000000) * 2 - 1) * config.jitter;
     const due = Math.max(
@@ -40,8 +45,10 @@ export class DelayQueue {
         const now = performance.now();
         while (this.queue[0] && this.queue[0].due <= now + 0.5) {
           const entry = this.queue.shift()!;
-          this.delayed?.(Math.max(0, performance.now() - entry.due));
-          entry.run();
+          const deliver =
+            this.delayed?.(Math.max(0, performance.now() - entry.due)) !==
+            false;
+          if (deliver) entry.run();
         }
         this.schedule();
       },

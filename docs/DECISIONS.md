@@ -1,5 +1,11 @@
 # Playground decisions — updated 1 September 2026
 
+## Authoritative automatic-carbine lab
+
+The carbine is always equipped, automatic on primary-button hold, and has unlimited ammunition. Cadence, projectile identity, motion, moving-player/terrain collision, and impact events are server-owned. Local presentation predicts a provisional projectile against static terrain only; player hits remain harmless. This slice deliberately excludes health, damage, death, scoring, ammo, reloads, recoil, spread, weapon switching, rockets, explosions, audio, and finished art.
+
+Combat events are ordered separately from replaceable state snapshots through a generation and contiguous event cursor. Reset and jet-mode changes start a new combat generation. Ordinary resynchronization preserves the authoritative generation, cooldown, and live projectile list. Projectile collision is a pure shared swept-AABB layer; the per-player Rapier controller remains unchanged.
+
 ## Authoritative aim slice
 
 The current fuel-limited jet rules are retained. The next slice adds mouse-only absolute 360-degree aim without firing, weapons, body rotation or collider changes. Aim travels in the existing tick-addressed input frame as signed 16-bit `aimQ`; no pointer-coordinate or separate aim-message path is introduced. Missing input preserves the last authoritative angle while neutralizing movement, jump and thrust.

@@ -1,3 +1,18 @@
+# Authoritative carbine playtest
+
+Status: **pending human playtest**. The earlier aim playtest was explicitly deferred and is not treated as passed. Run this later at 0, 100, and 200 ms added round-trip latency with two windows.
+
+1. Activate the arena, then tap and hold the primary mouse button while aiming at open space, walls, platforms, and the other player. The first local flash/projectile should precede delayed authority; confirmed impacts must agree with the server.
+2. Confirm automatic cadence is steady while held, released taps do not fire later, the activation click does not fire, and leaving the arena or switching focus cannot leave fire stuck.
+3. Fire while running, reversing, jumping, landing, and jetting. Hits must not move, damage, or otherwise change either player.
+4. Watch the other window for chronological spawn, travel, and impact without duplicate flashes or lingering bullets. Repeat across the signed aim wrap.
+5. Reset, toggle jets, hide/restore, reload, reconnect, and restart the server while firing. Old-generation projectiles and effects must not reappear.
+6. Export diagnostics after surprises and record combat cursor/gaps, cooldown, confirmations, projectile/effect counts, message sizes, preset, browser, and steps.
+
+This lab does not validate weapon balance, damage, simultaneous two-human fun, real-network impairment, or player capacity.
+
+---
+
 # Authoritative mouse-aim playtest
 
 Status: **pending human playtest**. Run `bun run dev` directly on the computer, connect two windows, and keep the current jets available. Test each item at 0 ms, 100 ms and 200 ms added round-trip latency.
