@@ -1,4 +1,27 @@
-# Playground validation — updated 2 September 2026
+# Playground validation — updated 23 September 2026
+
+## Authoritative duel lab: automated acceptance passed
+
+Build `playground-duel-lab-v1`, protocol 7, content `playground-6`, player trace 6, and room replay `duel-lab-1`. Formatting, strict TypeScript, package boundaries, and all **78 Bun unit/integration tests (3,150 assertions)** pass. Rapier initialization/restoration, the 900-tick player replay, the 440-tick duel replay, and the production build pass. The duel replay produces 20 shots, 16 player impacts, four deaths, and four respawns. The existing Rapier bundle-size advisory remains.
+
+Built-preview and Vite-development Playwright matrices each pass **54/54 cases** across Chromium, Firefox, and WebKit. Both modes exercise elimination, authoritative respawn, and the held-fire release rule at 0, 100, and 200 ms added RTT, alongside existing replay, timing, rendering, admission, and jet coverage. An earlier preview attempt passed 53/54: Firefox's existing delayed-reset timing case sampled correction p95 0.2667 units against <0.08. That case passed immediately in isolation and in the unchanged full rerun; keep the intermittent failure as evidence rather than erasing it or relaxing the gate. It was not reproduced in the development matrix.
+
+Full duel soak: **10:15:28–10:45:33 UTC, 23 September 2026**, 1,800.88 seconds, **30 resets and 30 rejoins**. Two isolated headless Chromium 151.0.7922.34 processes ran at 1440×1000 with routine 100 ms added RTT. Every automated gate passed; source fingerprint `c29ee982b445a4348b3e451d439957330db7d1b6e13d764ba5d725c260921b46` remained unchanged. P1 recorded 48 deaths and 47 completed respawns; P2 recorded 31 deaths and 31 completed respawns across replaced browser pages. P1's final death occurred too near the end to respawn within the run and is not counted as a completed cycle. Each scripted duel required a confirmed elimination for both players before advancing.
+
+| Measure | Worst sampled post-warm-up value | Gate |
+| --- | --- | --- |
+| Server work p95 / p99 | 1.788 / 2.390 ms | ≤8 / ≤12 ms |
+| Position / ordinary / thrust correction p95 | 0 / 0 / 0 units | <0.08 units |
+| Aim correction p95 / maximum | 0 / 0 quantization steps | p95 = 0 |
+| Upstream / downstream per player | 7.402 / 42.043 kB/s | ≤8 / ≤64 kB/s |
+| Post-warm-up server RSS median growth | 2.172 MiB | <32 MiB alarm |
+| Largest server / client message | 2,626 / 131 bytes | <16 KiB / ≤2 KiB |
+
+All 360 sampled two-client states had two players, 62 scene objects, 70 scene-graph objects, 20 tracked geometries, 15 application listeners, and 102 DOM elements per page. GPU geometries ranged 11–13, currently assigned materials 19–24, and WebGL programs 3–6; these vary with pooled effect/material use, not entity accumulation. Remote history stayed ≤40 snapshots, life history ≤33 of 120, prediction history ≤19 of 120, and incoming/outgoing delay queues ≤5/6 of 256. Sampled and final diagnostics reported no event gaps, duplicate events, capacity drops, server overruns, browser errors, or leaked players. The final server counters recorded 8,925 damage and 80 protected hits.
+
+Retained Chromium profiles at minutes 5, 10, 15, 20, 25, and completion showed P1 used heap 5.88–6.03 MiB (5.99 final), P2 7.27–8.24 MiB (7.38 final), and about 2.58 MiB backing storage per client. Each sample retained one document and 53 browser listeners; DOM nodes stayed at 253 for P1 and 246–252 for P2 across page replacement. No continuing gameplay-resource growth appeared in these samples. Heap snapshots/forced collection and headless scheduling are part of this harness; this is not a real-display or production-capacity benchmark.
+
+Evidence: `artifacts/playground-duel-lab-v1-soak-1800s-1790158528325/`, including `report.json`, timing records, heap profiles/snapshots, and final screenshots. Human aim, carbine, and duel playtests remain pending. Installed Chrome/Firefox/Safari manual checks, simultaneous two-human play, real-network impairment, real-display/low-end performance, and remote CI are unverified.
 
 ## Authoritative automatic-carbine lab: automated acceptance passed
 

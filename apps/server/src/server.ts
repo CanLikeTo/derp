@@ -7,10 +7,28 @@ import {
   parseClient,
   Samples,
   type ServerMessage,
+  type CombatEvent,
+  type EventBatch,
   type ServerStats,
 } from "@derp/protocol";
 import { Room } from "./room";
 import type { ServerWebSocket } from "bun";
+
+export function batchCombatEvents(
+  events: CombatEvent[],
+  roomGeneration: number,
+  tick: number,
+): EventBatch[] {
+  const batches: EventBatch[] = [];
+  for (let index = 0; index < events.length; index += LIMITS.eventBatch)
+    batches.push({
+      type: "events",
+      roomGeneration,
+      tick,
+      events: events.slice(index, index + LIMITS.eventBatch),
+    });
+  return batches;
+}
 
 export class Outbox {
   pending: string | undefined;
@@ -92,6 +110,10 @@ export async function startServer(port = 3001) {
     playerImpacts: room.playerImpacts,
     expiredProjectiles: room.expiredProjectiles,
     capacityDrops: room.capacityDrops,
+    damage: room.damage,
+    deaths: room.deaths,
+    respawns: room.respawns,
+    protectedHits: room.protectedHits,
   });
   function send(socket: ServerWebSocket<SocketData>, message: ServerMessage) {
     outBytes += socket.data.outbox.offer(
@@ -297,12 +319,16 @@ export async function startServer(port = 3001) {
       if (events.length)
         for (const socket of sockets)
           if (socket.data.joined)
-            send(socket, {
-              type: "events",
-              roomGeneration: room.roomGeneration,
-              tick: room.tick,
+            for (const batch of batchCombatEvents(
               events,
-            });
+              room.roomGeneration,
+              room.tick,
+            ))
+              send(socket, batch);
+      for (const transition of room.transitions)
+        for (const socket of sockets)
+          if (socket.data.joined && socket.data.id === transition.id)
+            state(socket, "baseline", transition.reason);
       accumulator -= TICK_MS;
       steps++;
       if (room.tick % 3 === 0)

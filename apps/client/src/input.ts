@@ -52,6 +52,8 @@ export class Controls {
   private jump = false;
   private fireHeld = false;
   private fireLatched = false;
+  private physicalFireDown = false;
+  private fireNeedsRelease = false;
   press(code: string, repeat = false) {
     if (repeat || this.held.has(code)) return;
     this.held.add(code);
@@ -60,14 +62,19 @@ export class Controls {
   release(code: string) {
     this.held.delete(code);
   }
-  pressFire() {
+  pressFire(eligible = true) {
+    this.physicalFireDown = true;
+    if (!eligible || this.fireNeedsRelease) return;
     if (!this.fireHeld) this.fireLatched = true;
     this.fireHeld = true;
   }
   releaseFire() {
+    this.physicalFireDown = false;
+    this.fireNeedsRelease = false;
     this.fireHeld = false;
   }
   clearFire() {
+    this.fireNeedsRelease ||= this.physicalFireDown;
     this.fireHeld = false;
     this.fireLatched = false;
   }
@@ -92,5 +99,8 @@ export class Controls {
   }
   get firing() {
     return this.fireHeld || this.fireLatched;
+  }
+  get requiresFireRelease() {
+    return this.fireNeedsRelease;
   }
 }

@@ -1,19 +1,25 @@
 import {
   CONTENT_VERSION,
   neutralInput,
-  wrapAimQ,
+  spawnState,
   type Input,
   type RoomRules,
+  type PlayerState,
 } from "@derp/simulation";
 import { Room } from "./room";
-import type { CombatEvent, ProjectileView } from "@derp/protocol";
+import {
+  validPlayer,
+  type CombatEvent,
+  type ProjectileView,
+} from "@derp/protocol";
 
-export const COMBAT_TRACE_VERSION = "projectile-lab-1";
+export const COMBAT_TRACE_VERSION = "duel-lab-1";
 
 export type CombatTrace = {
   version: typeof COMBAT_TRACE_VERSION;
   contentVersion: typeof CONTENT_VERSION;
   rules: RoomRules;
+  initial: [PlayerState, PlayerState];
   inputs: Array<[Input, Input]>;
 };
 
@@ -29,24 +35,19 @@ export function combatFixtureTrace(): CombatTrace {
     version: COMBAT_TRACE_VERSION,
     contentVersion: CONTENT_VERSION,
     rules: { jetsEnabled: true },
-    inputs: Array.from({ length: 180 }, (_, tick) => {
-      const collisionFixture = tick < 60;
+    initial: [
+      { ...spawnState("trace-p1", 1), x: -1, y: 0.92 },
+      { ...spawnState("trace-p2", 2), x: 1, y: 0.92 },
+    ],
+    inputs: Array.from({ length: 440 }, (_, tick) => {
       return [
         {
-          ...neutralInput(collisionFixture ? 0 : wrapAimQ(tick * 337)),
-          moveX: collisionFixture ? 0 : tick % 120 < 60 ? 1 : -1,
-          jumpPressed: !collisionFixture && tick % 60 === 15,
-          jetHeld: !collisionFixture && tick % 45 < 8,
-          fire: tick < 120,
+          ...neutralInput(0),
+          fire: tick >= 65 && tick < 280,
         },
         {
-          ...neutralInput(
-            collisionFixture ? -32_768 : wrapAimQ(32_000 - tick * 211),
-          ),
-          moveX: collisionFixture ? 0 : tick % 100 < 50 ? -1 : 1,
-          jumpPressed: !collisionFixture && tick % 75 === 25,
-          jetHeld: !collisionFixture && tick % 50 < 5,
-          fire: tick >= 60 && tick < 150,
+          ...neutralInput(-32768),
+          fire: tick >= 65 && tick < 280,
         },
       ];
     }),
@@ -77,7 +78,7 @@ export function parseCombatTrace(value: unknown): CombatTrace {
     throw new Error("Invalid combat trace");
   const trace = value as Record<string, unknown>;
   if (
-    Object.keys(trace).length !== 4 ||
+    Object.keys(trace).length !== 5 ||
     trace.version !== COMBAT_TRACE_VERSION ||
     trace.contentVersion !== CONTENT_VERSION ||
     typeof trace.rules !== "object" ||
@@ -85,6 +86,13 @@ export function parseCombatTrace(value: unknown): CombatTrace {
     Array.isArray(trace.rules) ||
     Object.keys(trace.rules).length !== 1 ||
     typeof (trace.rules as Record<string, unknown>).jetsEnabled !== "boolean" ||
+    !Array.isArray(trace.initial) ||
+    trace.initial.length !== 2 ||
+    !trace.initial.every(validPlayer) ||
+    trace.initial[0]!.slot !== 1 ||
+    trace.initial[1]!.slot !== 2 ||
+    trace.initial[0]!.id !== "trace-p1" ||
+    trace.initial[1]!.id !== "trace-p2" ||
     !Array.isArray(trace.inputs) ||
     trace.inputs.length > 10_000 ||
     !trace.inputs.every(
@@ -103,6 +111,8 @@ export function replayCombatTrace(trace: CombatTrace): CombatReplayFrame[] {
   room.rules = { ...trace.rules };
   const first = room.join("trace-p1")!;
   const second = room.join("trace-p2")!;
+  first.state = { ...trace.initial[0] };
+  second.state = { ...trace.initial[1] };
   room.baseline(first.state.id);
   room.baseline(second.state.id);
   const frames: CombatReplayFrame[] = [];
@@ -112,6 +122,7 @@ export function replayCombatTrace(trace: CombatTrace): CombatReplayFrame[] {
         room.input(peer.state.id, {
           type: "input",
           inputEpoch: peer.epoch,
+          lifeId: peer.state.lifeId,
           tick: room.tick + 1,
           ...pair[index]!,
         });

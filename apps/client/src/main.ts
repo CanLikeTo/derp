@@ -6,6 +6,7 @@ import {
   MOVEMENT,
   JETS,
   CARBINE,
+  DUEL,
   aimQToDegrees,
   type Trace,
 } from "@derp/simulation";
@@ -54,6 +55,7 @@ function start() {
     </section><aside>
       <section class="control-panel"><div class="panel-heading">02 / CONNECTION</div><div id="status" role="status" aria-live="polite">Disconnected</div><p class="muted">Open a second window at this address to add another player.</p><button id="connect" class="primary">Connect <span>↗</span></button><div class="button-row"><button id="disconnect">Disconnect</button><button id="reconnect">Reconnect</button></div><button id="reset" disabled>Reset playground <span>↺</span></button></section>
       <section class="control-panel"><div class="panel-heading">03 / JET EXPERIMENT</div><button id="jets" disabled>Enable jets · resets both players</button><label for="fuel" id="fuel-label">Jets off</label><progress id="fuel" max="45" value="45" aria-label="Jet fuel"></progress><p class="muted small">Hold either Shift for thrust. Release both on the ground to refill. Space still jumps.</p></section>
+      <section class="control-panel"><div class="panel-heading">DUEL / VITALS</div><label for="health" id="health-label">Health · —</label><progress id="health" max="100" value="100" aria-label="Health"></progress><p id="life-status" class="muted small">Four carbine hits eliminate a player. Respawn is automatic after two seconds.</p><div id="life-announcement" class="sr-only" role="status" aria-live="polite"></div></section>
       <section class="control-panel"><div class="panel-heading">04 / NETWORK LAB</div><label for="latency">Added round-trip latency</label><select id="latency"><option value="local">0 ms · Local</option><option value="routine">100 ms · ±20 ms jitter</option><option value="degraded">200 ms · ±40 ms jitter</option></select><p class="muted small">Seeded application delay. Ordered delivery. This does not simulate TCP packet loss.</p><label class="checkbox"><input id="debug" type="checkbox"> Show collision / server ghost</label><p class="muted small">The ghost is a historical server pose, not a prediction-error marker.</p></section>
       <section class="control-panel"><div class="panel-heading">05 / EVIDENCE</div><button id="export">Export diagnostics <span>↓</span></button><details><summary>Live diagnostics</summary><pre id="diagnostics"></pre></details></section>
     </aside></div><footer class="footer"><span>BUN + THREE.JS + RAPIER</span><span>NO ACCOUNTS. NO PUBLIC SERVER. JUST THE FOUNDATION.</span></footer>`;
@@ -98,6 +100,8 @@ function start() {
   let controlAt = -Infinity;
   let currentPointerTarget: WorldPoint | undefined,
     reticleVisible = false;
+  let confirmedHealth:
+    { lifeId: number; tick: number; health: number } | undefined;
   const pendingPings = new Map<number, number>();
   const events: { at: number; event: string }[] = [];
   const note = (event: string) => {
@@ -200,6 +204,7 @@ function start() {
     prediction.clear();
     interpolation.clear();
     combat.clear();
+    confirmedHealth = undefined;
     latest = undefined;
     playerId = "";
     syncing = false;
@@ -325,7 +330,53 @@ function start() {
       return;
     }
     if (message.type === "events") {
-      if (!combat.receive(message, playerId)) resync("combat event gap");
+      const priorCursor = combat.eventCursor;
+      if (!combat.receive(message, playerId)) {
+        resync("combat event gap");
+        return;
+      }
+      try {
+        for (const event of message.events) {
+          if (event.eventId <= priorCursor) continue;
+          interpolation.record(event, message.tick);
+          if (
+            event.type === "impact" &&
+            event.target === "player" &&
+            event.targetId === playerId &&
+            prediction.state?.lifeId === event.targetLifeId
+          ) {
+            confirmedHealth = {
+              lifeId: event.targetLifeId,
+              tick: message.tick,
+              health: event.health,
+            };
+            prediction.state.health = event.health;
+          }
+          if (event.type === "death" && event.player.id === playerId) {
+            controls.clear();
+            combat.clearLocal();
+            prediction.state = { ...event.player };
+            prediction.authoritative = { ...event.player };
+            prediction.history.clear();
+            prediction.offset = { x: 0, y: 0 };
+            prediction.tick = message.tick;
+            prediction.finalizedTick = message.tick;
+            syncing = true;
+            syncAt = performance.now();
+            element("life-announcement").textContent =
+              "Eliminated. Respawning in two seconds.";
+            setStatus("Eliminated · respawning");
+          }
+          if (event.type === "respawn" && event.player.id === playerId) {
+            controls.clear();
+            confirmedHealth = undefined;
+            element("life-announcement").textContent =
+              "Respawned. Release and press fire again.";
+          }
+        }
+      } catch {
+        resync("lifecycle history bound");
+      }
       return;
     }
     for (const receipt of message.inputTiming.receipts)
@@ -336,12 +387,15 @@ function start() {
       });
     if (message.type === "baseline") {
       controls.clear();
+      const preserveLifeTimeline =
+        (message.reason === "death" || message.reason === "respawn") &&
+        message.roomGeneration === combat.roomGeneration;
       latest = message;
       playerId = message.playerId;
       firstTick = message.tick;
       if (!timingReady) {
         prediction.baseline(message, message.tick);
-        combat.baseline(message);
+        combat.baseline(message, preserveLifeTimeline);
         interpolation.clear();
         interpolation.push(message);
         syncing = true;
@@ -369,13 +423,17 @@ function start() {
         estimatedTick,
       });
       prediction.baseline(message, Math.floor(serverTick()) + lead);
-      combat.baseline(message);
-      interpolation.clear();
+      combat.baseline(message, preserveLifeTimeline);
+      if (!preserveLifeTimeline) interpolation.clear();
       interpolation.push(message);
       syncing = false;
       lastSnapshotAt = performance.now();
       setStatus(
-        active ? "Connected · movement active" : "Connected · controls paused",
+        message.players.find((player) => player.id === playerId)?.health === 0
+          ? "Eliminated · respawning"
+          : active
+            ? "Connected · movement active"
+            : "Connected · controls paused",
       );
       note(`baseline: ${message.reason}`);
       if (!active) {
@@ -397,6 +455,14 @@ function start() {
       if (!syncing)
         try {
           prediction.reconcile(message);
+          if (
+            confirmedHealth &&
+            prediction.state?.lifeId === confirmedHealth.lifeId
+          ) {
+            if (message.tick < confirmedHealth.tick)
+              prediction.state.health = confirmedHealth.health;
+            else confirmedHealth = undefined;
+          }
           if (!active) prediction.cancelPending();
         } catch {
           resync("prediction history mismatch");
@@ -424,7 +490,10 @@ function start() {
     viewport.focus();
     updateFocus();
     if (active) pointer.update(event.clientX, event.clientY);
-    if (event.button === 0 && wasActive && active) controls.pressFire();
+    if (event.button === 0)
+      controls.pressFire(
+        wasActive && active && !syncing && (prediction.state?.health ?? 0) > 0,
+      );
   });
   viewport.addEventListener("pointermove", (event) => {
     if (active) pointer.update(event.clientX, event.clientY);
@@ -531,6 +600,7 @@ function start() {
       movement: MOVEMENT,
       jets: JETS,
       carbine: CARBINE,
+      duel: DUEL,
       rules: prediction.rules,
       status,
       active,
@@ -545,6 +615,7 @@ function start() {
       inputEpoch: prediction.epoch,
       pendingInputs: prediction.history.size,
       interpolationDepth: interpolation.snapshots.length,
+      lifecycleDepth: interpolation.lifecycle.length,
       underruns: interpolation.underruns,
       staleMs: lastSnapshotAt ? performance.now() - lastSnapshotAt : 0,
       correction: prediction.correction,
@@ -565,11 +636,19 @@ function start() {
       },
       combat: {
         trigger: controls.firing,
+        requiresFireRelease: controls.requiresFireRelease,
         predictedCooldown: prediction.state?.carbineCooldownTicksRemaining ?? 0,
         authoritativeCooldown:
           prediction.authoritative?.carbineCooldownTicksRemaining ?? 0,
         activeProjectiles: latest?.projectiles.length ?? 0,
         ...combat.diagnostics(),
+      },
+      life: {
+        health: prediction.state?.health,
+        lifeId: prediction.state?.lifeId,
+        respawnAtTick: prediction.state?.respawnAtTick,
+        protectedUntilTick: prediction.state?.spawnProtectedUntilTick,
+        confirmedHealth,
       },
       corrections: prediction.corrections.summary(),
       correctionsByActivity: {
@@ -675,7 +754,7 @@ function start() {
     const pointerTarget: WorldPoint | undefined =
       active && !syncing ? pointer.target(view.renderer.domElement) : undefined;
     currentPointerTarget = pointerTarget;
-    if (active && !syncing && prediction.state) {
+    if (active && !syncing && prediction.state?.health) {
       if (now - lastSnapshotAt > 1000) resync("snapshots stale");
       else {
         const target = Math.floor(serverTick()) + lead;
@@ -703,6 +782,18 @@ function start() {
     }
     element<HTMLProgressElement>("fuel").value =
       prediction.state?.jetFuelTicksRemaining ?? JETS.fuelTicks;
+    const localHealth = prediction.state?.health ?? DUEL.health;
+    element<HTMLProgressElement>("health").value = localHealth;
+    element("health-label").textContent = prediction.state
+      ? `Health · ${localHealth} / ${DUEL.health}`
+      : "Health · —";
+    element("life-status").textContent =
+      prediction.state?.health === 0
+        ? `Respawning in ${Math.max(0, Math.ceil(((prediction.state.respawnAtTick ?? 0) - serverTick()) / 60))} s · release and press fire again`
+        : prediction.state &&
+            prediction.state.spawnProtectedUntilTick > serverTick()
+          ? "Spawn protected · firing ends protection"
+          : "Four carbine hits eliminate a player.";
     element("fuel-label").textContent =
       prediction.state && prediction.rules.jetsEnabled
         ? `Jet fuel · ${prediction.state.jetFuelTicksRemaining} / ${JETS.fuelTicks}`
@@ -711,7 +802,11 @@ function start() {
     const displayedAim = prediction.state
       ? pointer.sample(prediction.state, pointerTarget)
       : { aimQ: 0, reticleVisible: false };
-    reticleVisible = active && !syncing && displayedAim.reticleVisible;
+    reticleVisible =
+      active &&
+      !syncing &&
+      !!prediction.state?.health &&
+      displayedAim.reticleVisible;
     const players = interpolation.at(
       serverTick() - rtt / 2 / TICK_MS - 100 / TICK_MS,
       playerId,
@@ -726,6 +821,7 @@ function start() {
     const combatView = combat.presentation(
       interpolation.projectilesAt(renderTick),
       renderTick,
+      prediction.tick,
     );
     view.draw(
       players,
@@ -736,6 +832,8 @@ function start() {
       reticleVisible,
       combatView.projectiles,
       combatView.effects,
+      renderTick,
+      serverTick(),
     );
     requestAnimationFrame(frame);
   }

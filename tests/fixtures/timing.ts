@@ -44,6 +44,10 @@ export async function timingScenario(options: {
     playerImpacts: 0,
     expiredProjectiles: 0,
     capacityDrops: 0,
+    damage: 0,
+    deaths: 0,
+    respawns: 0,
+    protectedHits: 0,
   };
   const state = (type: "baseline" | "snapshot"): StateMessage => ({
     rules: { jetsEnabled: false },
