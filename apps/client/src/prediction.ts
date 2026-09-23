@@ -19,6 +19,26 @@ import {
   type CombatEvent,
 } from "@derp/protocol";
 import { TimingLog } from "./timing";
+
+export type ConfirmedShieldBreak = { lifeId: number; eventId: number };
+
+// Shield feedback follows the latest confirmed state, including a shot event
+// that arrived before the next replaceable snapshot. Prediction may run ahead.
+export function confirmedLocalProtectionUntil(
+  predicted: PlayerState,
+  confirmed: PlayerState | undefined,
+  snapshotCursor: number,
+  shieldBreak: ConfirmedShieldBreak | undefined,
+): number {
+  if (!confirmed || predicted.lifeId !== confirmed.lifeId) return 0;
+  if (
+    shieldBreak?.lifeId === confirmed.lifeId &&
+    shieldBreak.eventId > snapshotCursor
+  )
+    return 0;
+  return confirmed.spawnProtectedUntilTick;
+}
+
 export class Prediction {
   timing = new TimingLog();
   rules: RoomRules = { jetsEnabled: false };

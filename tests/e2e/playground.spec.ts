@@ -17,6 +17,7 @@ type Diagnostic = {
   active: boolean;
   playerId: string;
   inputEpoch: number;
+  serverTick: number;
   pendingInputs: number;
   predictedTick: number;
   finalizedTick: number;
@@ -53,7 +54,12 @@ type Diagnostic = {
     localRespawns: number;
     requiresFireRelease: boolean;
   };
-  life: { health: number; lifeId: number; respawnAtTick: number | null };
+  life: {
+    health: number;
+    lifeId: number;
+    respawnAtTick: number | null;
+    protectedUntilTick: number;
+  };
   corrections: { p95: number };
   aim: {
     pointerValid: boolean;
@@ -314,6 +320,32 @@ test("automatic carbine predicts immediately and confirms authoritative impacts"
   expect((await diagnostics(page)).combat.eventGaps).toBe(0);
   expect((await diagnostics(page)).server.capacityDrops).toBe(0);
   await observer.close();
+});
+
+test("local shield label follows confirmed protection and shot cancellation", async ({
+  page,
+}) => {
+  await join(page);
+  await focus(page);
+  const epoch = (await diagnostics(page)).inputEpoch;
+  await page.locator("#reset").click();
+  await expect
+    .poll(async () => (await diagnostics(page)).inputEpoch)
+    .toBeGreaterThan(epoch);
+  const local = page.locator(".player-label").filter({ hasText: "LOCAL" });
+  const initial = await diagnostics(page);
+  expect(initial.life.protectedUntilTick).toBeGreaterThan(initial.serverTick);
+  await expect(local).toContainText("SHIELDED");
+  await aimAtWorld(page, 0, 6);
+  await page.mouse.down({ button: "left" });
+  await expect
+    .poll(async () => (await diagnostics(page)).server.shots)
+    .toBeGreaterThan(initial.server.shots);
+  await expect
+    .poll(async () => (await diagnostics(page)).life.protectedUntilTick)
+    .toBe(0);
+  await expect(local).not.toContainText("SHIELDED");
+  await page.mouse.up({ button: "left" });
 });
 
 for (const preset of ["local", "routine", "degraded"] as const)

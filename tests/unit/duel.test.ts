@@ -7,6 +7,7 @@ import {
   Simulation,
   initializePhysics,
   neutralInput,
+  spawnState,
   type PlayerState,
 } from "@derp/simulation";
 import {
@@ -21,10 +22,40 @@ import {
 import { Room } from "../../apps/server/src/room";
 import { Controls } from "../../apps/client/src/input";
 import { CombatPresentation } from "../../apps/client/src/combat";
-import { Interpolation } from "../../apps/client/src/prediction";
+import {
+  Interpolation,
+  confirmedLocalProtectionUntil,
+} from "../../apps/client/src/prediction";
 import { batchCombatEvents } from "../../apps/server/src/server";
 
 beforeAll(initializePhysics);
+
+test("local shield display uses confirmed state and a shot event before its snapshot", () => {
+  const confirmed = {
+    ...spawnState("a", 1),
+    spawnProtectedUntilTick: 61,
+  };
+  const predicted = { ...confirmed, spawnProtectedUntilTick: 0 };
+  // Prediction may already be past expiry; the confirmed snapshot is not.
+  expect(
+    confirmedLocalProtectionUntil(predicted, confirmed, 4, undefined),
+  ).toBe(61);
+  const shot = { lifeId: 1, eventId: 5 };
+  // An older prediction can also retain protection after the shot event.
+  const stale = { ...confirmed };
+  expect(confirmedLocalProtectionUntil(stale, confirmed, 4, shot)).toBe(0);
+  expect(
+    confirmedLocalProtectionUntil(
+      stale,
+      { ...confirmed, spawnProtectedUntilTick: 0 },
+      5,
+      shot,
+    ),
+  ).toBe(0);
+  expect(
+    confirmedLocalProtectionUntil({ ...stale, lifeId: 2 }, confirmed, 4, shot),
+  ).toBe(0);
+});
 
 function duel() {
   const room = new Room();

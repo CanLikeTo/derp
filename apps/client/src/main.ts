@@ -20,7 +20,11 @@ import {
   type ClientMessage,
   type StateMessage,
 } from "@derp/protocol";
-import { Prediction, Interpolation } from "./prediction";
+import {
+  Prediction,
+  Interpolation,
+  confirmedLocalProtectionUntil,
+} from "./prediction";
 import { predictionLead, SchedulingJitter, ServerClock } from "./timing";
 import { Controls, PointerAim, type WorldPoint } from "./input";
 import { DelayQueue, PRESETS, type Preset } from "./network";
@@ -102,6 +106,7 @@ function start() {
     reticleVisible = false;
   let confirmedHealth:
     { lifeId: number; tick: number; health: number } | undefined;
+  let confirmedShieldBreak: { lifeId: number; eventId: number } | undefined;
   const pendingPings = new Map<number, number>();
   const events: { at: number; event: string }[] = [];
   const note = (event: string) => {
@@ -205,6 +210,7 @@ function start() {
     interpolation.clear();
     combat.clear();
     confirmedHealth = undefined;
+    confirmedShieldBreak = undefined;
     latest = undefined;
     playerId = "";
     syncing = false;
@@ -340,6 +346,15 @@ function start() {
           if (event.eventId <= priorCursor) continue;
           interpolation.record(event, message.tick);
           if (
+            event.type === "shot" &&
+            event.ownerId === playerId &&
+            event.ownerLifeId === prediction.state?.lifeId
+          )
+            confirmedShieldBreak = {
+              lifeId: event.ownerLifeId,
+              eventId: event.eventId,
+            };
+          if (
             event.type === "impact" &&
             event.target === "player" &&
             event.targetId === playerId &&
@@ -387,6 +402,7 @@ function start() {
       });
     if (message.type === "baseline") {
       controls.clear();
+      confirmedShieldBreak = undefined;
       const preserveLifeTimeline =
         (message.reason === "death" || message.reason === "respawn") &&
         message.roomGeneration === combat.roomGeneration;
@@ -647,7 +663,16 @@ function start() {
         health: prediction.state?.health,
         lifeId: prediction.state?.lifeId,
         respawnAtTick: prediction.state?.respawnAtTick,
-        protectedUntilTick: prediction.state?.spawnProtectedUntilTick,
+        protectedUntilTick: prediction.state
+          ? confirmedLocalProtectionUntil(
+              prediction.state,
+              latest?.players.find((player) => player.id === playerId),
+              latest?.eventCursor ?? 0,
+              confirmedShieldBreak,
+            )
+          : undefined,
+        confirmedProtectionTick: latest?.tick,
+        predictedProtectedUntilTick: prediction.state?.spawnProtectedUntilTick,
         confirmedHealth,
       },
       corrections: prediction.corrections.summary(),
@@ -782,6 +807,20 @@ function start() {
     }
     element<HTMLProgressElement>("fuel").value =
       prediction.state?.jetFuelTicksRemaining ?? JETS.fuelTicks;
+    const confirmedPlayer = latest?.players.find(
+      (player) => player.id === playerId,
+    );
+    const protectedUntilTick = prediction.state
+      ? confirmedLocalProtectionUntil(
+          prediction.state,
+          confirmedPlayer,
+          latest?.eventCursor ?? 0,
+          confirmedShieldBreak,
+        )
+      : 0;
+    const shielded =
+      !!prediction.state?.health &&
+      protectedUntilTick > (latest?.tick ?? Infinity);
     const localHealth = prediction.state?.health ?? DUEL.health;
     element<HTMLProgressElement>("health").value = localHealth;
     element("health-label").textContent = prediction.state
@@ -790,8 +829,7 @@ function start() {
     element("life-status").textContent =
       prediction.state?.health === 0
         ? `Respawning in ${Math.max(0, Math.ceil(((prediction.state.respawnAtTick ?? 0) - serverTick()) / 60))} s · release and press fire again`
-        : prediction.state &&
-            prediction.state.spawnProtectedUntilTick > serverTick()
+        : shielded
           ? "Spawn protected · firing ends protection"
           : "Four carbine hits eliminate a player.";
     element("fuel-label").textContent =
@@ -814,6 +852,7 @@ function start() {
     if (prediction.state)
       players.push({
         ...prediction.state,
+        spawnProtectedUntilTick: protectedUntilTick,
         x: prediction.state.x + prediction.offset.x,
         y: prediction.state.y + prediction.offset.y,
       });
@@ -833,7 +872,7 @@ function start() {
       combatView.projectiles,
       combatView.effects,
       renderTick,
-      serverTick(),
+      latest?.tick ?? 0,
     );
     requestAnimationFrame(frame);
   }
