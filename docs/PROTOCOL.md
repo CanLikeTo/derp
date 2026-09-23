@@ -9,28 +9,36 @@ For later releases, change the protocol version when message semantics become in
 The browser sends a hello after the WebSocket opens:
 
 ```json
-{"type":"hello","protocol":6,"content":"playground-5"}
+{"type":"hello","protocol":7,"content":"playground-6"}
 ```
 
 Only the server chooses the player UUID and slot. A compatible hello either receives a `baseline`, or a `rejected` message followed by closure. There are two player seats and eight total pending/live socket slots. Sending input before admission is invalid.
 
-A baseline contains `tick`, `serverTime`, `playerId`, `inputEpoch`, `roomGeneration`, `eventCursor`, complete `players`, complete live `projectiles`, `rules`, recipient `inputTiming`, diagnostic `stats`, and a human-readable `reason`. Player replay state adds `carbineCooldownTicksRemaining`. Room rules accompany every state message.
+A baseline contains `tick`, `serverTime`, `playerId`, `inputEpoch`, `roomGeneration`, `eventCursor`, complete `players`, complete live `projectiles`, `rules`, recipient `inputTiming`, diagnostic `stats`, and a human-readable `reason`. Player replay state includes carbine cooldown, health, life ID, respawn deadline and protection expiry. Room rules accompany every state message.
 
 Before enabling movement, the client measures three round trips, then requests a fresh baseline. Changing latency during admission restarts the connection if a first baseline has not arrived. This prevents clearing a delayed hello without replacing it.
 
 ## Input and finalized time
 
 ```json
-{"type":"input","inputEpoch":7,"tick":121,"moveX":1,"jumpPressed":false,"jetHeld":false,"aimQ":8192,"fire":true}
+{"type":"input","inputEpoch":7,"lifeId":1,"tick":121,"moveX":1,"jumpPressed":false,"jetHeld":false,"aimQ":8192,"fire":true}
 ```
 
-An input is one tick of intent. `moveX` is exactly -1, 0 or 1. The jump flag is a press edge, `fire` is held automatic intent, and `aimQ` is a required signed 16-bit direction. Clients cannot send elapsed time, positions, velocities, cursor coordinates, projectile state, or a target player. Unknown fields are rejected.
+An input is one tick of intent for the assigned player, current epoch and current life. `moveX` is exactly -1, 0 or 1. The jump flag is a press edge, `fire` is held automatic intent, and `aimQ` is a required signed 16-bit direction. Clients cannot send elapsed time, positions, health, damage, velocities, cursor coordinates, projectile state, or a target player. Unknown fields are rejected.
 
-## Authoritative carbine (protocol 6 / content playground-5 / trace 5)
+## Authoritative duel (protocol 7 / content playground-6 / trace 6)
+
+Every player starts with 100 health. A confirmed carbine collision applies 25 damage once. Protection absorbs a projectile with zero damage. At zero health the player freezes and becomes untargetable until the start of death tick plus 120; a new life begins at the farther of the two verified spawns. Protection is active on the first 60 ticks of that life and ends before collision tests on its first authorized firing attempt. Both players may die in the same tick. A projectile keeps the originating player ID and life ID even if its owner dies or disconnects.
+
+Player-impact events include attacker and victim life IDs, damage and resulting health. Death and respawn events carry complete transition states. A lifecycle transition rotates only its player's input epoch and clears queued commands. All events of a room tick precede transition baselines and snapshots. Batches have at most 16 events, with contiguous IDs across batches; no more than 20 events are produced by a tick. Reset and jet-mode change increment the room generation. Ordinary resynchronization retains health, deadlines, protection and projectiles.
+
+The client applies confirmed local health/death promptly and waits for the respawn baseline before resuming input. A held trigger across death must be released and pressed again. Remote life events and projectile removals use the same delayed presentation clock as remote motion. Position/aim never interpolate across life IDs. The local health display is authoritative, not predicted. The room replay uses `duel-lab-1`; build ID is `playground-duel-lab-v1`.
+
+## Authoritative carbine lab (historical protocol 6 / content playground-5 / trace 5)
 
 The server decrements the replayed carbine cooldown before evaluating each tick. Held fire authorizes shots at S, S+10, S+20, giving six shots per second. Missing, suspended, retired, invalid, or obsolete input means `fire=false`; taps received while cooldown is active are not queued. The room caps live projectiles at 12 and still consumes cooldown when that cap rejects a legal attempt.
 
-Projectiles travel 36 units/second for at most 45 movement ticks. The authoritative room advances existing projectiles, performs swept tests against expanded terrain and moving non-owner player AABBs, resolves impacts, then spawns newly authorized shots. Earliest collision wins; equal-time terrain wins before terrain index and player slot/ID. Hits are visual only. Projectile-to-projectile and owner collisions are ignored.
+Projectiles travel 36 units/second for at most 45 movement ticks. The authoritative room advances existing projectiles, performs swept tests against expanded terrain and moving non-owner player AABBs, resolves impacts, then spawns newly authorized shots. Earliest collision wins; equal-time terrain wins before terrain index and player slot/ID. Hits were visual only in this historical build. Projectile-to-projectile and owner collisions are ignored.
 
 Shot and impact events use ordered nonreplaceable `events` batches with contiguous IDs. State messages carry the current event cursor and full projectile list. Clients ignore duplicates and old generations and resynchronize on gaps or a snapshot cursor ahead of processed events. Reset and jet-mode changes advance `roomGeneration`, clear combat state, and reset projectile/event IDs. Ordinary baselines preserve the current generation and live authoritative projectiles.
 

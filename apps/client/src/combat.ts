@@ -14,14 +14,17 @@ import type {
   ShotEvent,
   StateMessage,
 } from "@derp/protocol";
+import { LIMITS } from "@derp/protocol";
 
 export type EffectView = {
-  kind: "muzzle" | "impact-terrain" | "impact-player";
+  kind: "muzzle" | "impact-terrain" | "impact-player" | "impact-protected";
   x: number;
   y: number;
   normalX: number;
   normalY: number;
   ownerSlot: 1 | 2;
+  startsTick: number;
+  immediate: boolean;
   expiresTick: number;
 };
 
@@ -43,22 +46,37 @@ export class CombatPresentation {
   eventGaps = 0;
   terrainImpacts = 0;
   playerImpacts = 0;
+  damage = 0;
+  protectedHits = 0;
+  deaths = 0;
+  respawns = 0;
+  localDeaths = 0;
+  localRespawns = 0;
   provisionalTerrainStops = 0;
   provisionalExpiries = 0;
   private provisionalSequence = 0;
   private provisionals = new Map<string, Provisional>();
-  private eventProjectiles = new Map<number, ProjectileView>();
-  private tombstones = new Set<number>();
+  private eventProjectiles = new Map<
+    number,
+    { projectile: ProjectileView; tick: number }
+  >();
+  private tombstones = new Map<number, number>();
   private effects: EffectView[] = [];
+  private pendingEvents = 0;
   recent: Array<{ tick: number; event: string }> = [];
 
-  baseline(message: StateMessage) {
+  baseline(message: StateMessage, preserveTimeline = false) {
+    const preserve =
+      preserveTimeline && this.roomGeneration === message.roomGeneration;
     this.roomGeneration = message.roomGeneration;
     this.eventCursor = message.eventCursor;
     this.provisionals.clear();
-    this.eventProjectiles.clear();
-    this.tombstones.clear();
-    this.effects = [];
+    if (!preserve) {
+      this.eventProjectiles.clear();
+      this.tombstones.clear();
+      this.effects = [];
+      this.pendingEvents = 0;
+    } else this.effects = this.effects.filter((effect) => !effect.immediate);
   }
 
   snapshot(message: StateMessage): boolean {
@@ -67,12 +85,23 @@ export class CombatPresentation {
       this.eventGaps++;
       return false;
     }
-    const ids = new Set(message.projectiles.map((projectile) => projectile.id));
-    for (const id of this.eventProjectiles.keys())
-      if (ids.has(id) || this.tombstones.has(id))
+    this.pendingEvents = 0;
+    const active = new Set(
+      message.projectiles.map((projectile) => projectile.id),
+    );
+    for (const [id, value] of this.eventProjectiles)
+      if (
+        message.tick >= value.tick &&
+        !active.has(id) &&
+        !this.tombstones.has(id)
+      )
+        this.tombstones.set(id, message.tick);
+    for (const [id, value] of this.eventProjectiles)
+      if (message.tick - value.tick > LIMITS.snapshots * 3)
         this.eventProjectiles.delete(id);
-    for (const id of this.tombstones)
-      if (!ids.has(id)) this.tombstones.delete(id);
+    for (const [id, tick] of this.tombstones)
+      if (message.tick - tick > LIMITS.snapshots * 3)
+        this.tombstones.delete(id);
     for (const [key, projectile] of this.provisionals)
       if (projectile.sourceTick <= message.tick) {
         this.provisionals.delete(key);
@@ -97,12 +126,28 @@ export class CombatPresentation {
         return false;
       }
       this.eventCursor = event.eventId;
+      this.pendingEvents++;
+      if (this.pendingEvents > 256) return false;
       this.consume(event, batch.tick, localId);
     }
     return true;
   }
 
   private consume(event: CombatEvent, tick: number, localId: string) {
+    if (event.type === "death" || event.type === "respawn") {
+      if (event.type === "death") {
+        this.deaths++;
+        if (event.player.id === localId) this.localDeaths++;
+      } else {
+        this.respawns++;
+        if (event.player.id === localId) this.localRespawns++;
+      }
+      this.note(
+        tick,
+        event.type + " " + event.player.id + " life " + event.player.lifeId,
+      );
+      return;
+    }
     if (event.type === "shot") {
       const key = this.shotKey(
         event.ownerId,
@@ -121,15 +166,22 @@ export class CombatPresentation {
           normalX: 0,
           normalY: 0,
           ownerSlot: event.ownerSlot,
+          startsTick: tick,
+          immediate: false,
           expiresTick: tick + CARBINE.muzzleFlashTicks,
         });
       }
       this.eventProjectiles.set(event.projectileId, {
-        id: event.projectileId,
-        ownerSlot: event.ownerSlot,
-        x: event.x,
-        y: event.y,
-        aimQ: event.aimQ,
+        tick,
+        projectile: {
+          id: event.projectileId,
+          ownerId: event.ownerId,
+          ownerLifeId: event.ownerLifeId,
+          ownerSlot: event.ownerSlot,
+          x: event.x,
+          y: event.y,
+          aimQ: event.aimQ,
+        },
       });
       this.note(
         tick,
@@ -139,17 +191,26 @@ export class CombatPresentation {
       );
       return;
     }
-    this.eventProjectiles.delete(event.projectileId);
-    this.tombstones.add(event.projectileId);
-    if (event.target === "player") this.playerImpacts++;
-    else this.terrainImpacts++;
+    this.tombstones.set(event.projectileId, tick);
+    if (event.target === "player") {
+      this.playerImpacts++;
+      this.damage += event.damage;
+      if (event.damage === 0) this.protectedHits++;
+    } else this.terrainImpacts++;
     this.addEffect({
-      kind: event.target === "player" ? "impact-player" : "impact-terrain",
+      kind:
+        event.target === "player"
+          ? event.damage === 0
+            ? "impact-protected"
+            : "impact-player"
+          : "impact-terrain",
       x: event.x,
       y: event.y,
       normalX: event.normalX,
       normalY: event.normalY,
       ownerSlot: 1,
+      startsTick: tick,
+      immediate: false,
       expiresTick: tick + CARBINE.impactTicks,
     });
     this.note(tick, event.target + " impact " + event.projectileId);
@@ -188,6 +249,8 @@ export class CombatPresentation {
     this.provisionals.set(key, {
       key,
       id: -++this.provisionalSequence,
+      ownerId: player.id,
+      ownerLifeId: player.lifeId,
       ownerSlot: player.slot,
       x: muzzle.x,
       y: muzzle.y,
@@ -204,20 +267,32 @@ export class CombatPresentation {
       normalX: 0,
       normalY: 0,
       ownerSlot: player.slot,
+      startsTick: sourceTick,
+      immediate: true,
       expiresTick: sourceTick + CARBINE.muzzleFlashTicks,
     });
   }
 
-  presentation(authoritative: ProjectileView[], renderTick: number) {
+  presentation(
+    authoritative: ProjectileView[],
+    renderTick: number,
+    localTick = renderTick,
+  ) {
     this.effects = this.effects.filter(
-      (effect) => effect.expiresTick > renderTick,
+      (effect) =>
+        effect.expiresTick > (effect.immediate ? localTick : renderTick),
     );
     const byId = new Map<number, ProjectileView>();
     for (const projectile of authoritative)
-      if (!this.tombstones.has(projectile.id))
+      if ((this.tombstones.get(projectile.id) ?? Infinity) > renderTick)
         byId.set(projectile.id, projectile);
-    for (const [id, projectile] of this.eventProjectiles)
-      if (!byId.has(id) && !this.tombstones.has(id)) byId.set(id, projectile);
+    for (const [id, value] of this.eventProjectiles)
+      if (
+        value.tick <= renderTick &&
+        !byId.has(id) &&
+        (this.tombstones.get(id) ?? Infinity) > renderTick
+      )
+        byId.set(id, value.projectile);
     for (const projectile of this.provisionals.values())
       byId.set(projectile.id, projectile);
     return {
@@ -225,7 +300,10 @@ export class CombatPresentation {
         0,
         CARBINE.roomProjectileCap + CARBINE.provisionalProjectileCap,
       ),
-      effects: this.effects,
+      effects: this.effects.filter(
+        (effect) =>
+          (effect.immediate ? localTick : renderTick) >= effect.startsTick,
+      ),
     };
   }
 
@@ -236,6 +314,11 @@ export class CombatPresentation {
     this.eventProjectiles.clear();
     this.tombstones.clear();
     this.effects = [];
+    this.pendingEvents = 0;
+  }
+  clearLocal() {
+    this.provisionals.clear();
+    this.effects = this.effects.filter((effect) => !effect.immediate);
   }
 
   diagnostics() {
@@ -250,6 +333,13 @@ export class CombatPresentation {
       eventGaps: this.eventGaps,
       terrainImpacts: this.terrainImpacts,
       playerImpacts: this.playerImpacts,
+      damage: this.damage,
+      protectedHits: this.protectedHits,
+      deaths: this.deaths,
+      respawns: this.respawns,
+      localDeaths: this.localDeaths,
+      localRespawns: this.localRespawns,
+      pendingEvents: this.pendingEvents,
       provisionalTerrainStops: this.provisionalTerrainStops,
       provisionalExpiries: this.provisionalExpiries,
       provisionals: this.provisionals.size,

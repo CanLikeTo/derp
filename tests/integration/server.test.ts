@@ -99,6 +99,7 @@ test("live reset replaces epochs, stale input ignored, flood rejected", async ()
       jetHeld: false,
       type: "input",
       inputEpoch: baseline.inputEpoch,
+      lifeId: 1,
       tick: reset.tick + 16,
       moveX: 1,
       jumpPressed: true,
@@ -129,6 +130,7 @@ test("far-future and oversized traffic cannot retain a seat", async () => {
       jetHeld: false,
       type: "input",
       inputEpoch: baseline.inputEpoch,
+      lifeId: 1,
       tick: baseline.tick + 100,
       moveX: 1,
       jumpPressed: true,
@@ -207,7 +209,7 @@ test("old protocol/content versions are explicitly rejected", async () => {
   }
 });
 
-test("automatic carbine emits an ordered authoritative shot and harmless player impact", async () => {
+test("automatic carbine emits an ordered authoritative shot and protected player impact", async () => {
   await delay(80);
   const a = await connect();
   const b = await connect();
@@ -218,6 +220,7 @@ test("automatic carbine emits an ordered authoritative shot and harmless player 
       JSON.stringify({
         type: "input",
         inputEpoch: baseline.inputEpoch,
+        lifeId: 1,
         tick: baseline.tick + 8,
         moveX: 0,
         jumpPressed: false,
@@ -254,6 +257,121 @@ test("automatic carbine emits an ordered authoritative shot and harmless player 
     if (latest?.type === "snapshot") {
       expect(latest.eventCursor).toBe(combat.at(-1)!.eventId);
       expect(latest.players).toHaveLength(2);
+    }
+  } finally {
+    a.socket.close();
+    b.socket.close();
+  }
+});
+
+test("live mutual kills rotate epochs and deliver ordered respawn baselines", async () => {
+  await delay(80);
+  const a = await connect();
+  const b = await connect();
+  try {
+    const firstA = a.messages[0],
+      firstB = b.messages[0];
+    if (firstA?.type !== "baseline" || firstB?.type !== "baseline")
+      throw new Error("Missing admission baseline");
+    const stateA = running.room.participants.get(firstA.playerId)!;
+    const stateB = running.room.participants.get(firstB.playerId)!;
+    stateA.state = {
+      ...stateA.state,
+      x: -1,
+      y: 0.92,
+      health: 25,
+      spawnProtectedUntilTick: 0,
+    };
+    stateB.state = {
+      ...stateB.state,
+      x: 1,
+      y: 0.92,
+      health: 25,
+      spawnProtectedUntilTick: 0,
+    };
+    const tick = running.room.tick + 6;
+    for (const [client, baseline, aimQ] of [
+      [a, firstA, 0],
+      [b, firstB, -32768],
+    ] as const)
+      client.socket.send(
+        JSON.stringify({
+          type: "input",
+          inputEpoch: baseline.inputEpoch,
+          lifeId: 1,
+          tick,
+          moveX: 0,
+          jumpPressed: false,
+          jetHeld: false,
+          aimQ,
+          fire: true,
+        }),
+      );
+    for (let i = 0; i < 100 && running.room.deaths < 2; i++) await delay(20);
+    expect(running.room.deaths).toBeGreaterThanOrEqual(2);
+    for (
+      let i = 0;
+      i < 100 &&
+      [a, b].some(
+        (client) =>
+          !client.messages.some(
+            (message) =>
+              message.type === "baseline" && message.reason === "death",
+          ),
+      );
+      i++
+    )
+      await delay(10);
+    for (const [client, baseline] of [
+      [a, firstA],
+      [b, firstB],
+    ] as const) {
+      const death = client.messages.find(
+        (message) => message.type === "baseline" && message.reason === "death",
+      );
+      expect(death?.type).toBe("baseline");
+      if (death?.type !== "baseline") continue;
+      expect(death.inputEpoch).not.toBe(baseline.inputEpoch);
+      expect(
+        death.players.find((player) => player.id === baseline.playerId)?.health,
+      ).toBe(0);
+      const eventCursor =
+        client.messages
+          .flatMap((message) =>
+            message.type === "events" ? message.events : [],
+          )
+          .at(-1)?.eventId ?? 0;
+      expect(eventCursor).toBe(death.eventCursor);
+    }
+    for (let i = 0; i < 130 && running.room.respawns < 2; i++) await delay(20);
+    expect(running.room.respawns).toBeGreaterThanOrEqual(2);
+    for (
+      let i = 0;
+      i < 100 &&
+      [a, b].some(
+        (client) =>
+          !client.messages.some(
+            (message) =>
+              message.type === "baseline" && message.reason === "respawn",
+          ),
+      );
+      i++
+    )
+      await delay(10);
+    for (const [client, baseline] of [
+      [a, firstA],
+      [b, firstB],
+    ] as const) {
+      const respawn = client.messages.find(
+        (message) =>
+          message.type === "baseline" && message.reason === "respawn",
+      );
+      expect(respawn?.type).toBe("baseline");
+      if (respawn?.type !== "baseline") continue;
+      expect(
+        respawn.players.find((player) => player.id === baseline.playerId),
+      ).toMatchObject({ health: 100, lifeId: 2 });
+      expect(respawn.roomGeneration).toBe(baseline.roomGeneration);
     }
   } finally {
     a.socket.close();

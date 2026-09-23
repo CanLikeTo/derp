@@ -20,6 +20,7 @@ test("diagnostics stay bounded and attribute receipt outcomes to each player", a
     const input = {
       type: "input" as const,
       inputEpoch: a.epoch,
+      lifeId: 1,
       tick: 1,
       ...NEUTRAL,
     };

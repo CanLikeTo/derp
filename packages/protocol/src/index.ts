@@ -5,14 +5,15 @@ import {
   AIM_MIN,
   AIM_MAX,
   CARBINE,
+  DUEL,
   type RoomRules,
   TRACE_VERSION,
   type Trace,
   type PlayerState,
 } from "@derp/simulation";
 export { CONTENT_VERSION };
-export const PROTOCOL_VERSION = 6;
-export const BUILD_ID = "playground-carbine-lab-v1";
+export const PROTOCOL_VERSION = 7;
+export const BUILD_ID = "playground-duel-lab-v1";
 export const LIMITS = {
   messageBytes: 2048,
   futureTicks: 16,
@@ -27,6 +28,7 @@ export const LIMITS = {
 export type InputFrame = {
   type: "input";
   inputEpoch: number;
+  lifeId: number;
   tick: number;
   moveX: -1 | 0 | 1;
   jumpPressed: boolean;
@@ -57,6 +59,10 @@ export type ServerStats = {
   playerImpacts: number;
   expiredProjectiles: number;
   capacityDrops: number;
+  damage: number;
+  deaths: number;
+  respawns: number;
+  protectedHits: number;
 };
 export type InputReceipt = {
   inputEpoch: number;
@@ -98,6 +104,8 @@ export type StateMessage = {
 };
 export type ProjectileView = {
   id: number;
+  ownerId: string;
+  ownerLifeId: number;
   ownerSlot: 1 | 2;
   x: number;
   y: number;
@@ -108,6 +116,7 @@ export type ShotEvent = {
   eventId: number;
   projectileId: number;
   ownerId: string;
+  ownerLifeId: number;
   ownerSlot: 1 | 2;
   sourceInputEpoch: number;
   sourceTick: number;
@@ -128,8 +137,31 @@ export type TerrainImpactEvent = {
 export type PlayerImpactEvent = Omit<TerrainImpactEvent, "target"> & {
   target: "player";
   targetId: string;
+  targetLifeId: number;
+  ownerId: string;
+  ownerLifeId: number;
+  damage: number;
+  health: number;
 };
-export type CombatEvent = ShotEvent | TerrainImpactEvent | PlayerImpactEvent;
+export type DeathEvent = {
+  type: "death";
+  eventId: number;
+  player: PlayerState;
+  killerId: string;
+  killerLifeId: number;
+  projectileId: number;
+};
+export type RespawnEvent = {
+  type: "respawn";
+  eventId: number;
+  player: PlayerState;
+};
+export type CombatEvent =
+  | ShotEvent
+  | TerrainImpactEvent
+  | PlayerImpactEvent
+  | DeathEvent
+  | RespawnEvent;
 export type EventBatch = {
   type: "events";
   roomGeneration: number;
@@ -186,6 +218,7 @@ export function parseClient(raw: string): ClientMessage {
         keys(value, [
           "type",
           "inputEpoch",
+          "lifeId",
           "tick",
           "moveX",
           "jumpPressed",
@@ -194,6 +227,8 @@ export function parseClient(raw: string): ClientMessage {
           "fire",
         ]) &&
         integer(value.inputEpoch) &&
+        integer(value.lifeId) &&
+        value.lifeId > 0 &&
         integer(value.tick) &&
         [-1, 0, 1].includes(value.moveX as number) &&
         typeof value.jumpPressed === "boolean" &&
@@ -230,6 +265,10 @@ export function validPlayer(value: unknown): value is PlayerState {
     keys(value, [
       "id",
       "slot",
+      "health",
+      "lifeId",
+      "respawnAtTick",
+      "spawnProtectedUntilTick",
       "x",
       "y",
       "vx",
@@ -244,6 +283,22 @@ export function validPlayer(value: unknown): value is PlayerState {
     ]) &&
     text(value.id) &&
     [1, 2].includes(value.slot as number) &&
+    integer(value.health) &&
+    value.health <= DUEL.health &&
+    integer(value.lifeId) &&
+    value.lifeId > 0 &&
+    (value.respawnAtTick === null || integer(value.respawnAtTick)) &&
+    integer(value.spawnProtectedUntilTick) &&
+    (value.health === 0) === (value.respawnAtTick !== null) &&
+    (value.health !== 0 ||
+      (value.spawnProtectedUntilTick === 0 &&
+        value.jetActive === false &&
+        value.vx === 0 &&
+        value.vy === 0 &&
+        value.grounded === false &&
+        value.coyoteTicksRemaining === 0 &&
+        value.jumpBufferTicksRemaining === 0 &&
+        value.carbineCooldownTicksRemaining === 0)) &&
     ["x", "y", "vx", "vy"].every((key) => number(value[key])) &&
     typeof value.grounded === "boolean" &&
     integer(value.coyoteTicksRemaining) &&
@@ -262,9 +317,20 @@ export function validPlayer(value: unknown): value is PlayerState {
 function validProjectile(value: unknown): value is ProjectileView {
   return (
     record(value) &&
-    keys(value, ["id", "ownerSlot", "x", "y", "aimQ"]) &&
+    keys(value, [
+      "id",
+      "ownerId",
+      "ownerLifeId",
+      "ownerSlot",
+      "x",
+      "y",
+      "aimQ",
+    ]) &&
     integer(value.id) &&
     value.id > 0 &&
+    text(value.ownerId) &&
+    integer(value.ownerLifeId) &&
+    value.ownerLifeId > 0 &&
     [1, 2].includes(value.ownerSlot as number) &&
     number(value.x) &&
     number(value.y) &&
@@ -274,6 +340,35 @@ function validProjectile(value: unknown): value is ProjectileView {
 
 function validCombatEvent(value: unknown): value is CombatEvent {
   if (!record(value)) return false;
+  if (value.type === "death")
+    return (
+      keys(value, [
+        "type",
+        "eventId",
+        "player",
+        "killerId",
+        "killerLifeId",
+        "projectileId",
+      ]) &&
+      integer(value.eventId) &&
+      value.eventId > 0 &&
+      validPlayer(value.player) &&
+      value.player.health === 0 &&
+      text(value.killerId) &&
+      integer(value.killerLifeId) &&
+      value.killerLifeId > 0 &&
+      integer(value.projectileId) &&
+      value.projectileId > 0
+    );
+  if (value.type === "respawn")
+    return (
+      keys(value, ["type", "eventId", "player"]) &&
+      integer(value.eventId) &&
+      value.eventId > 0 &&
+      validPlayer(value.player) &&
+      value.player.health === DUEL.health &&
+      value.player.respawnAtTick === null
+    );
   if (value.type === "shot")
     return (
       keys(value, [
@@ -281,6 +376,7 @@ function validCombatEvent(value: unknown): value is CombatEvent {
         "eventId",
         "projectileId",
         "ownerId",
+        "ownerLifeId",
         "ownerSlot",
         "sourceInputEpoch",
         "sourceTick",
@@ -293,9 +389,13 @@ function validCombatEvent(value: unknown): value is CombatEvent {
       integer(value.projectileId) &&
       value.projectileId > 0 &&
       text(value.ownerId) &&
+      integer(value.ownerLifeId) &&
+      value.ownerLifeId > 0 &&
       [1, 2].includes(value.ownerSlot as number) &&
       integer(value.sourceInputEpoch) &&
+      value.sourceInputEpoch > 0 &&
       integer(value.sourceTick) &&
+      value.sourceTick > 0 &&
       number(value.x) &&
       number(value.y) &&
       aim(value.aimQ)
@@ -332,13 +432,27 @@ function validCombatEvent(value: unknown): value is CombatEvent {
       "projectileId",
       "target",
       "targetId",
+      "targetLifeId",
+      "ownerId",
+      "ownerLifeId",
+      "damage",
+      "health",
       "x",
       "y",
       "normalX",
       "normalY",
     ]) &&
     base &&
-    text(value.targetId)
+    text(value.targetId) &&
+    integer(value.targetLifeId) &&
+    value.targetLifeId > 0 &&
+    text(value.ownerId) &&
+    integer(value.ownerLifeId) &&
+    value.ownerLifeId > 0 &&
+    integer(value.damage) &&
+    [0, DUEL.damage].includes(value.damage) &&
+    integer(value.health) &&
+    value.health <= DUEL.health
   );
 }
 function validInputTiming(value: unknown): value is InputTiming {
@@ -467,6 +581,10 @@ export function parseServer(raw: string): ServerMessage {
       "playerImpacts",
       "expiredProjectiles",
       "capacityDrops",
+      "damage",
+      "deaths",
+      "respawns",
+      "protectedHits",
     ];
     if (
       keys(value.stats, fields) &&

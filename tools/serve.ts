@@ -31,18 +31,22 @@ const commands = [
     "apps/client/vite.config.ts",
   ],
 ];
-for (const cmd of commands) {
+for (const [index, cmd] of commands.entries()) {
   const child = Bun.spawn(cmd, {
     cwd: root,
     stdout: "inherit",
     stderr: "inherit",
-    // Keep the pipe open: Vite treats stdin EOF as a shutdown request outside CI.
-    // This supervisor owns process lifetime and forwards termination explicitly.
+    // Vite otherwise treats an inherited stdin EOF as a shutdown request.
+    // The supervisor owns process lifetime and forwards termination explicitly.
     stdin: "pipe",
+    ...(index === 1 ? { env: { ...process.env, CI: "true" } } : {}),
   });
   children.push(child);
   child.exited.then((code) => {
-    if (!stopping) void stop(code === 0 ? 1 : code);
+    if (!stopping) {
+      console.error(`${cmd[1]} exited with code ${code}`);
+      void stop(code === 0 ? 1 : code);
+    }
   });
 }
 await new Promise(() => {});

@@ -15,7 +15,7 @@ const data = file
     : fixtureTrace();
 await initializePhysics();
 
-if (combat || data?.version === "projectile-lab-1") {
+if (combat || data?.version === "duel-lab-1") {
   const trace = parseCombatTrace(data?.combatTrace ?? data?.trace ?? data);
   const frames = replayCombatTrace(trace);
   const events = frames.flatMap((frame) => frame.events);
@@ -30,6 +30,8 @@ if (combat || data?.version === "projectile-lab-1") {
       playerImpacts: events.filter(
         (event) => event.type === "impact" && event.target === "player",
       ).length,
+      deaths: events.filter((event) => event.type === "death").length,
+      respawns: events.filter((event) => event.type === "respawn").length,
       final: frames.at(-1),
     }),
   );
