@@ -134,6 +134,7 @@ export class View {
       color: "#55695b",
       roughness: 0.9,
     });
+    const outlineMaterial = new THREE.LineBasicMaterial({ color: "#c8ff9a" });
     for (const solid of ROOM.solids) {
       const geometry = new THREE.BoxGeometry(solid.width, solid.height, 1.2);
       const mesh = new THREE.Mesh(geometry, terrain);
@@ -141,7 +142,7 @@ export class View {
       this.scene.add(mesh);
       const outline = new THREE.LineSegments(
         new THREE.EdgesGeometry(geometry),
-        new THREE.LineBasicMaterial({ color: "#c8ff9a" }),
+        outlineMaterial,
       );
       outline.position.copy(mesh.position);
       this.outlines.add(outline);

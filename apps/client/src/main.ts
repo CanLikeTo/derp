@@ -27,7 +27,12 @@ import {
 } from "./prediction";
 import { predictionLead, SchedulingJitter, ServerClock } from "./timing";
 import { cameraBounds, type CameraBounds } from "./camera";
-import { Controls, PointerAim, type WorldPoint } from "./input";
+import {
+  Controls,
+  PointerAim,
+  samplePredictedAim,
+  type WorldPoint,
+} from "./input";
 import { DelayQueue, PRESETS, type Preset } from "./network";
 import { View } from "./view";
 import { CombatPresentation } from "./combat";
@@ -786,11 +791,6 @@ function start() {
       now - lastPing > 1000
     )
       ping();
-    const inputBounds = cameraBounds(renderedLocal());
-    const pointerTarget: WorldPoint | undefined =
-      active && !syncing
-        ? pointer.target(view.renderer.domElement, inputBounds)
-        : undefined;
     if (active && !syncing && prediction.state?.health) {
       if (now - lastSnapshotAt > 1000) resync("snapshots stale");
       else {
@@ -799,7 +799,12 @@ function start() {
         else
           try {
             for (let i = 0; i < 5 && prediction.tick < target; i++) {
-              const aim = pointer.sample(prediction.state!, pointerTarget);
+              const aim = samplePredictedAim(
+                pointer,
+                view.renderer.domElement,
+                renderedLocal(),
+                prediction.state!,
+              );
               combat.stepPrediction();
               const result = prediction.advanceWithActions(
                 controls.sample(aim.aimQ),

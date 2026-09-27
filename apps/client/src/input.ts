@@ -4,7 +4,7 @@ import {
   type Input,
   type PlayerState,
 } from "@derp/simulation";
-import type { CameraBounds } from "./camera";
+import { cameraBounds, type CameraBounds } from "./camera";
 
 export type WorldPoint = { x: number; y: number };
 
@@ -55,6 +55,17 @@ export class PointerAim {
   get valid() {
     return !!this.point;
   }
+}
+
+/** Aim for the tick about to run. The camera follows `rendered`, so call this again after every predicted move. */
+export function samplePredictedAim(
+  pointer: PointerAim,
+  canvas: HTMLCanvasElement,
+  rendered: { x: number; y: number } | undefined,
+  state: PlayerState,
+) {
+  const target = pointer.target(canvas, cameraBounds(rendered));
+  return { target, ...pointer.sample(state, target) };
 }
 export class Controls {
   private held = new Set<string>();
