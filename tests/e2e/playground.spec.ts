@@ -112,6 +112,14 @@ async function focus(page: Page) {
   }
   throw new Error("Playground focus did not settle on a stable input epoch");
 }
+async function resetPlayground(page: Page) {
+  await focus(page);
+  await expect(page.locator("#reset")).toBeEnabled();
+  // Keep the canvas focused so focus recovery cannot race reset with a new epoch.
+  await page.evaluate(() =>
+    (document.getElementById("reset") as HTMLButtonElement).click(),
+  );
+}
 async function setJets(page: Page, enabled: boolean) {
   await focus(page);
   if ((await diagnostics(page)).rules.jetsEnabled !== enabled) {
@@ -328,7 +336,7 @@ test("local shield label follows confirmed protection and shot cancellation", as
   await join(page);
   await focus(page);
   const epoch = (await diagnostics(page)).inputEpoch;
-  await page.locator("#reset").click();
+  await resetPlayground(page);
   await expect
     .poll(async () => (await diagnostics(page)).inputEpoch)
     .toBeGreaterThan(epoch);
@@ -488,7 +496,7 @@ test("two identities, movement, third rejection, reset and released seat", async
   await expectLabelInsideArena(second, 2);
   await focus(page);
   const oldEpoch = (await diagnostics(page)).inputEpoch;
-  await page.locator("#reset").click();
+  await resetPlayground(page);
   await expect
     .poll(async () => (await diagnostics(page)).inputEpoch)
     .toBeGreaterThan(oldEpoch);
@@ -535,7 +543,7 @@ test("prediction precedes acknowledgement; latency, correction, blur and stall r
       })
       .toBeLessThan(0.0001);
     expect((await diagnostics(page)).pendingInputs).toBeLessThanOrEqual(120);
-    await page.locator("#reset").click();
+    await resetPlayground(page);
     await focus(page);
   }
   await page.keyboard.down("KeyD");
@@ -981,7 +989,7 @@ test("two players confirm jet mode; predicted fuel responds under latency and su
       .toBeGreaterThan(epoch);
     expect((await diagnostics(page)).predicted!.jetActive).toBe(false);
     await page.keyboard.up("ShiftRight");
-    await page.locator("#reset").click();
+    await resetPlayground(page);
     await focus(page);
     expect((await diagnostics(page)).rules.jetsEnabled).toBe(true);
     await expect
