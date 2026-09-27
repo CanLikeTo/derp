@@ -145,6 +145,48 @@ async function aimAtWorld(page: Page, x: number, y: number) {
   );
 }
 
+async function positionForDuel(page: Page, interruptAfterFirstBurst = false) {
+  // A fresh baseline clears held keys. Reapply movement in short bursts so a
+  // resync during setup cannot silently leave the shooter at its spawn.
+  for (let attempt = 0; attempt < 24; attempt++) {
+    const state = (await diagnostics(page)).predicted;
+    if (state && state.x > -1 && state.x < 1) {
+      if (state.grounded) return;
+      await page.waitForTimeout(100);
+      continue;
+    }
+    await expect
+      .poll(async () => (await diagnostics(page)).status)
+      .toContain("movement active");
+    const direction = state && state.x >= 1 ? "KeyA" : "KeyD";
+    await page.keyboard.down(direction);
+    await page.keyboard.down("Space");
+    await page.keyboard.down("ShiftLeft");
+    await page.waitForTimeout(150);
+    if (interruptAfterFirstBurst && attempt === 0) {
+      const epoch = (await diagnostics(page)).inputEpoch;
+      await page.evaluate(() => window.__derp.stall());
+      await expect
+        .poll(async () => (await diagnostics(page)).inputEpoch)
+        .toBeGreaterThan(epoch);
+    }
+    await page.keyboard.up(direction);
+    await page.keyboard.up("Space");
+    await page.keyboard.up("ShiftLeft");
+  }
+  const state = await diagnostics(page);
+  throw new Error(
+    `Could not position duel shooter: ${JSON.stringify({
+      x: state.predicted?.x,
+      y: state.predicted?.y,
+      status: state.status,
+      inputEpoch: state.inputEpoch,
+      resyncs: state.resyncs,
+      recentEvents: state.recentEvents,
+    })}`,
+  );
+}
+
 test("Rapier Bun/browser parity and usable fixed-aspect scene", async ({
   page,
 }, testInfo) => {
@@ -368,16 +410,7 @@ for (const preset of ["local", "routine", "degraded"] as const)
     await page.locator("#latency").selectOption(preset);
     await victim.locator("#latency").selectOption(preset);
     await focus(page);
-    await page.keyboard.down("KeyD");
-    await page.keyboard.down("Space");
-    await page.keyboard.down("ShiftLeft");
-    await page.waitForTimeout(800);
-    await page.keyboard.up("KeyD");
-    await page.keyboard.up("Space");
-    await page.keyboard.up("ShiftLeft");
-    await expect
-      .poll(async () => (await diagnostics(page)).predicted?.grounded)
-      .toBe(true);
+    await positionForDuel(page, preset === "degraded");
     const shooter = (await diagnostics(page)).predicted!;
     expect(shooter.x).toBeGreaterThan(-2);
     expect(shooter.x).toBeLessThan(2);
