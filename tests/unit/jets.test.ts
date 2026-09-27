@@ -79,7 +79,7 @@ test("jump then thrust respects cap, coyote eligibility, landing buffer and roof
     expect(states[0]!.coyoteTicksRemaining).toBe(0);
     expect(states[0]!.jetFuelTicksRemaining).toBe(44);
     expect(
-      states.every((s) => s.vy <= 12 && s.y <= 12.091 && s.x <= 11.591),
+      states.every((s) => s.vy <= 12 && s.y <= 25.591 && s.x <= 35.591),
     ).toBe(true);
   }
   const buffered = replay(traces.buffer!);
@@ -90,7 +90,7 @@ test("jump then thrust respects cap, coyote eligibility, landing buffer and roof
   for (const name of ["roof", "wall"]) {
     const states = replay(traces[name]!);
     expect(
-      states.every((s) => s.y <= 12.091 && s.x <= 11.591 && s.x >= -11.591),
+      states.every((s) => s.y <= 25.591 && s.x <= 35.591 && s.x >= -35.591),
     ).toBe(true);
     expect(states[0]!.jetFuelTicksRemaining).toBe(44);
   }

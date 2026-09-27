@@ -2,7 +2,7 @@ import RAPIER from "@dimforge/rapier2d-compat";
 
 export const DT = 1 / 60;
 export const TICK_MS = 1000 / 60;
-export const CONTENT_VERSION = "playground-6";
+export const CONTENT_VERSION = "playground-7";
 export const TRACE_VERSION = 6;
 export const AIM_STEPS = 65_536;
 export const AIM_HALF_TURN = AIM_STEPS / 2;
@@ -87,17 +87,31 @@ export type PlayerState = {
   aimQ: number;
   carbineCooldownTicksRemaining: number;
 };
+// Twelve platforms per side. Y rises by 2; X mirrors for the left route.
+const CLIMB_X = [14, 19, 24, 29, 34, 29, 24, 19, 14, 19, 24, 29] as const;
+const CLIMB_PLATFORMS = CLIMB_X.flatMap((x, index) => {
+  const y = 1.25 + 2 * index;
+  return [
+    { x, y, width: 3, height: 0.5 },
+    { x: -x, y, width: 3, height: 0.5 },
+  ];
+});
+// Segments stay within the previously stable 24-unit span. A single 72-unit slab
+// never settles the character controller.
+const horizontalSpan = (y: number, height: number) =>
+  [-24, 0, 24].map((x) => ({ x, y, width: 24, height }));
 export const ROOM = {
-  width: 24,
-  height: 13.5,
+  width: 72,
+  height: 27,
   solids: [
-    { x: 0, y: 13.25, width: 24, height: 0.5 },
-    { x: 0, y: -0.5, width: 24, height: 1 },
-    { x: -12.5, y: 6.5, width: 1, height: 14 },
-    { x: 12.5, y: 6.5, width: 1, height: 14 },
+    ...horizontalSpan(26.75, 0.5),
+    ...horizontalSpan(-0.5, 1),
+    { x: -36.5, y: 13.25, width: 1, height: 27.5 },
+    { x: 36.5, y: 13.25, width: 1, height: 27.5 },
     { x: -4, y: 1.25, width: 4, height: 0.5 },
     { x: 3, y: 2.75, width: 4, height: 0.5 },
     { x: -8, y: 4, width: 3, height: 0.5 },
+    ...CLIMB_PLATFORMS,
   ],
 } as const;
 

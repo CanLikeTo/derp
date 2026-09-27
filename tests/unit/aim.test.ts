@@ -14,6 +14,7 @@ import {
   wrapAimQ,
 } from "@derp/simulation";
 import { emptyInputTiming, type StateMessage } from "@derp/protocol";
+import { cameraBounds } from "../../apps/client/src/camera";
 import { PointerAim, pointerToWorld } from "../../apps/client/src/input";
 import { Interpolation, Prediction } from "../../apps/client/src/prediction";
 import { Room } from "../../apps/server/src/room";
@@ -63,13 +64,16 @@ test("signed aim math covers cardinals, wrapping and deterministic antipodes", (
   );
 });
 
-test("canvas coordinates map to fixed world corners without DPR input", () => {
+test("canvas coordinates map through the central view without DPR input", () => {
   const rect = { left: 100, top: 50, width: 800, height: 450 };
-  expect(pointerToWorld(100, 50, rect)).toEqual({ x: -12, y: 13.5 });
-  expect(pointerToWorld(900, 500, rect)).toEqual({ x: 12, y: 0 });
-  expect(pointerToWorld(500, 275, rect)).toEqual({ x: 0, y: 6.75 });
-  expect(pointerToWorld(99, 50, rect)).toBeUndefined();
-  expect(pointerToWorld(100, 50, { ...rect, width: 0 })).toBeUndefined();
+  const bounds = cameraBounds();
+  expect(pointerToWorld(100, 50, rect, bounds)).toEqual({ x: -12, y: 13.5 });
+  expect(pointerToWorld(900, 500, rect, bounds)).toEqual({ x: 12, y: 0 });
+  expect(pointerToWorld(500, 275, rect, bounds)).toEqual({ x: 0, y: 6.75 });
+  expect(pointerToWorld(99, 50, rect, bounds)).toBeUndefined();
+  expect(
+    pointerToWorld(100, 50, { ...rect, width: 0 }, bounds),
+  ).toBeUndefined();
 });
 
 test("dead zone holds the prior aim and aim-only ticks cannot alter movement", () => {
