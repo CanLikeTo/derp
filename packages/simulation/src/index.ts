@@ -2,8 +2,8 @@ import RAPIER from "@dimforge/rapier2d-compat";
 
 export const DT = 1 / 60;
 export const TICK_MS = 1000 / 60;
-export const CONTENT_VERSION = "playground-5";
-export const TRACE_VERSION = 5;
+export const CONTENT_VERSION = "playground-6";
+export const TRACE_VERSION = 6;
 export const AIM_STEPS = 65_536;
 export const AIM_HALF_TURN = AIM_STEPS / 2;
 export const AIM_QUARTER_TURN = AIM_STEPS / 4;
@@ -39,6 +39,17 @@ export const CARBINE = {
   effectPoolSize: 32,
   collisionEpsilon: 1e-9,
 } as const;
+export const DUEL = {
+  health: 100,
+  damage: 25,
+  respawnTicks: 120,
+  protectionTicks: 60,
+  maxTickEvents: 20,
+} as const;
+export const SPAWNS = [
+  { x: -8, y: 0.92, slot: 1 },
+  { x: 8, y: 0.92, slot: 2 },
+] as const;
 export type RoomRules = { jetsEnabled: boolean };
 export const DISABLED_RULES: RoomRules = { jetsEnabled: false };
 export type Input = {
@@ -60,6 +71,10 @@ export const NEUTRAL: Input = neutralInput(0);
 export type PlayerState = {
   id: string;
   slot: 1 | 2;
+  health: number;
+  lifeId: number;
+  respawnAtTick: number | null;
+  spawnProtectedUntilTick: number;
   x: number;
   y: number;
   vx: number;
@@ -125,11 +140,16 @@ export function initializePhysics(): Promise<void> {
   return (initialization ??= RAPIER.init());
 }
 export function spawnState(id: string, slot: 1 | 2): PlayerState {
+  const spawn = SPAWNS[slot - 1]!;
   return {
     id,
     slot,
-    x: slot === 1 ? -8 : 8,
-    y: 0.92,
+    health: DUEL.health,
+    lifeId: 1,
+    respawnAtTick: null,
+    spawnProtectedUntilTick: 0,
+    x: spawn.x,
+    y: spawn.y,
     vx: 0,
     vy: 0,
     grounded: false,
@@ -282,6 +302,8 @@ export class Simulation {
     input: Input,
     rules: RoomRules,
   ): StepResult {
+    if (state.health === 0)
+      return { state: { ...state }, shotAuthorized: false };
     this.collider.setTranslation({ x: state.x, y: state.y });
     // Refresh broad phase after restoring a prediction snapshot, including teleports.
     this.world.step();

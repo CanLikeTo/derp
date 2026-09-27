@@ -1,4 +1,4 @@
-# dERP — local authoritative carbine playground
+# dERP — local authoritative duel playground
 
 A responsive, server-authoritative two-player foundation for a deeply unserious arena platformer. This build has two boxes, solid platforms, and useful diagnostics. Explosions come later.
 
@@ -11,7 +11,7 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-Open **http://127.0.0.1:5173** in two windows. Click **Connect** in each, then click the arena to activate it. Move the mouse for full 360-degree aim and hold the primary mouse button to fire the unlimited automatic carbine. Local shots appear immediately; projectile motion and harmless player/terrain impacts are confirmed by the server. A/D or Left/Right moves; Space jumps. Holding Space does not auto-jump. Click **Enable jets · resets both players** to enable the shared jet experiment, then hold either **Shift** key. Fuel lasts 45 simulation ticks (0.75 seconds); release both Shift keys while grounded to refill. Jets start disabled on server startup. A third connected player is rejected. Only the focused arena takes input.
+Open **http://127.0.0.1:5173** in two windows. Click **Connect** in each, then click the arena to activate it. Move the mouse for full 360-degree aim and hold the primary mouse button to fire the unlimited automatic carbine. Local shots appear immediately; the server confirms projectile hits. Four unprotected hits eliminate a player, who respawns after two seconds with one second of protection. Firing ends protection. Release and press the mouse button again after respawning. A/D or Left/Right moves; Space jumps. Holding Space does not auto-jump. Click **Enable jets · resets both players** to enable the shared jet experiment, then hold either **Shift** key. Fuel lasts 45 simulation ticks (0.75 seconds); release both Shift keys while grounded to refill. Jets start disabled on server startup. A third connected player is rejected. Only the focused arena takes input.
 
 `Disconnect` releases a seat. `Reconnect` creates a fresh anonymous identity. `Reset playground` resets both players through the server. Selecting a latency preset requests a new timing baseline. The debug ghost is an older authoritative pose, not an error measurement.
 
@@ -39,6 +39,7 @@ Vite reloads browser changes. Restart `bun run dev` after changing server/shared
 | `bun run soak` | 30 minutes, two isolated Chromium clients, movement/reset/rejoin cycles |
 | `bun run soak 1800 --jets --profile-memory` | Full jet acceptance run with held-thrust cycles and retained-memory profiling |
 | `bun run soak 1800 --jets --carbine --profile-memory` | Full carbine acceptance run with deterministic aim/fire/reset/rejoin cycles |
+| `bun run soak 1800 --jets --carbine --duel --profile-memory` | Full duel run with eliminations and respawns |
 | `bun run soak 1800 --profile-memory` | Soak plus retained Chromium heap/DOM samples and local heap snapshots |
 | `bun run soak 60` | Short harness rehearsal; not the acceptance soak |
 
@@ -54,7 +55,7 @@ Linux CI may need `bunx playwright install --with-deps chromium firefox webkit`.
 
 ## What is authoritative?
 
-The server owns movement, aim, carbine cadence, projectile spawn/motion/collision, jet rules/fuel, player identities, admission, and reset. Clients send one movement/jump/thrust/aim/fire intent for a target server tick, never a position or a client-selected delta-time. Simulation runs at 60 Hz and full snapshots at 20 Hz. Missing commands neutralize movement, jump, thrust, and fire while preserving the last authoritative aim. Late input cannot create a later shot.
+The server owns movement, aim, carbine cadence, projectile spawn/motion/collision, health, death, respawn, protection, jet rules/fuel, player identities, admission, and reset. Clients send one movement/jump/thrust/aim/fire intent for a target server tick, never a position, health, damage, or a client-selected delta-time. Simulation runs at 60 Hz and full snapshots at 20 Hz. Missing commands neutralize movement, jump, thrust, and fire while preserving the last authoritative aim. Late input cannot create a later shot.
 
 Local prediction uses exactly the same simulation code. A snapshot after tick T retires all input through T; the client restores the complete authoritative state and replays subsequent inputs. Position and aim errors are compared at the same tick. Remote players use position and shortest-arc aim interpolation with 100 ms extra buffering beyond estimated transit. Positions and collisions are X/Y only; rendered depth and direction indicators are cosmetic.
 
@@ -62,11 +63,11 @@ Blur/visibility loss clears input, pending prediction and buffered jump intent, 
 
 ## Measurements and limitations
 
-Use **Export diagnostics** to download a bounded local JSON record with timing samples, combat/event counters, environment details, and a replayable pending-input trace. It includes projectile/effect resource counts, message-byte maxima, carbine cooldown, aim corrections, room generation/event cursor, room rules, jet state, input outcomes, and correlated timing records. Player traces require version 5 / content `playground-5`; the separate room replay uses `projectile-lab-1`. Records stay local.
+Use **Export diagnostics** to download a bounded local JSON record with timing samples, combat/event counters, environment details, and a replayable pending-input trace. It includes health/life state, projectile/effect resource counts, message-byte maxima, carbine cooldown, aim corrections, room generation/event cursor, room rules, jet state, input outcomes, and correlated timing records. Player traces require version 6 / content `playground-6`; the separate room replay uses `duel-lab-1`. Records stay local.
 
 Generated test reports and screenshots are under `artifacts/`; each soak writes `report.json`, `timing.jsonl`, screenshots and its log into a unique `artifacts/<build>-soak-<seconds>s-<timestamp>/` directory; Playwright failures also keep traces in `test-results/`. The soak checks queue/entity bounds, error counts, correction and traffic budgets, and post-warm-up memory. Its 32 MiB median-growth alarm is an investigation trigger, not a proof that every leak is absent. Inspect the time series as well as the pass/fail result.
 
-The earlier jump-forgiveness soak exceeded the correction budget (0.1333-unit p95 versus <0.08). The first timing prerequisite build still exceeded that budget. The timestamp-based clock fix now passes both browser matrices and the full 30-minute soak; retained-memory profiling found no accumulating gameplay resources. The fuel-limited jet experiment passed its automated acceptance and has been retained as the current traversal rule. The authoritative aim and carbine slices pass their automated replay, three-engine browser and soak gates; their human playtests remain pending in `docs/PLAYTEST.md` and `docs/VALIDATION.md`.
+The earlier jump-forgiveness soak exceeded the correction budget (0.1333-unit p95 versus <0.08). The first timing prerequisite build still exceeded that budget. The timestamp-based clock fix now passes both browser matrices and the full 30-minute soak; retained-memory profiling found no accumulating gameplay resources. The fuel-limited jet experiment passed its automated acceptance and has been retained as the current traversal rule. The authoritative aim, carbine, and duel slices pass their automated replay, three-engine browser, and soak gates; their human playtests remain pending in `docs/PLAYTEST.md` and `docs/VALIDATION.md`.
 
 Two headless test browsers verify behavior and resource trends, not representative GPU performance or simultaneous human fun. Playwright WebKit is not real Safari. Read `docs/VALIDATION.md` for what was actually run and what remains unverified.
 
@@ -79,7 +80,7 @@ The Rapier compatibility build embeds WASM and produces a bundle-size advisory (
 - Shared simulation: canonical room, kinematic movement, state restoration and replay; no DOM/network/server imports.
 - Shared protocol: versions, runtime message validators, limits and measurement helpers.
 
-No health, damage, death, respawning, scoring, ammo, reloads, weapon switching, auth, lobbies, database, external art/audio, or hosting is included. The carbine is a projectile authority lab, not a complete combat system. The Colyseus comparison, full Rapier terrain sweep, and auth/provider/database compatibility investigation remain deferred.
+No scoring, ammo, reloads, weapon switching, auth, lobbies, database, external art/audio, or hosting is included. This duel remains an authority lab, not a complete match system. The Colyseus comparison, full Rapier terrain sweep, and auth/provider/database compatibility investigation remain deferred.
 
 A Git repository and remote are configured. The CI workflow is provided; remote CI for this change has not been run or verified.
 

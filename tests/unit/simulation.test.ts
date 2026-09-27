@@ -29,6 +29,10 @@ const stats = {
   playerImpacts: 0,
   expiredProjectiles: 0,
   capacityDrops: 0,
+  damage: 0,
+  deaths: 0,
+  respawns: 0,
+  protectedHits: 0,
 };
 test("floor, wall, ceiling and ledge collisions; restoration after teleport", () => {
   const sim = new Simulation();
@@ -115,6 +119,7 @@ test("room caps identity, consumes one input per tick, expires jumps and keeps g
     ...NEUTRAL,
     type: "input" as const,
     inputEpoch: peer.epoch,
+    lifeId: 1,
     tick: room.tick + 1,
     moveX: 1 as const,
     jumpPressed: true,
@@ -341,6 +346,7 @@ test("fresh epochs and suspend cancel buffered intent without refilling coyote o
       ...NEUTRAL,
       type: "input",
       inputEpoch: oldEpoch,
+      lifeId: 1,
       tick: room.tick + 1,
       moveX: 1,
       jumpPressed: true,
@@ -360,8 +366,14 @@ test("fresh epochs and suspend cancel buffered intent without refilling coyote o
   expect(peer.state.vy).toBe(11);
   expect(peer.state.coyoteTicksRemaining).toBe(0);
   room.reset();
-  expect(peer.state).toEqual(spawnState("a", 1));
+  expect(peer.state).toEqual({
+    ...spawnState("a", 1),
+    spawnProtectedUntilTick: room.tick + 61,
+  });
   room.leave("a");
-  expect(room.join("fresh")!.state).toEqual(spawnState("fresh", 1));
+  expect(room.join("fresh")!.state).toEqual({
+    ...spawnState("fresh", 1),
+    spawnProtectedUntilTick: room.tick + 61,
+  });
   room.dispose();
 });

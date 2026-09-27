@@ -7,7 +7,10 @@ import { BUILD_ID, percentile } from "@derp/protocol";
 const seconds = Number(process.argv[2] ?? 1800);
 const jets = process.argv.includes("--jets");
 const carbine = process.argv.includes("--carbine");
+const duel = process.argv.includes("--duel");
 const profileMemory = process.argv.includes("--profile-memory");
+if (duel && (!carbine || !jets))
+  throw new Error("--duel requires --carbine and --jets");
 const memory: unknown[] = [];
 if (!Number.isInteger(seconds) || seconds < 10 || seconds > 7200)
   throw new Error("Duration must be 10–7200 seconds (default 1800)");
@@ -60,6 +63,8 @@ const lastSequences = [0, 0];
 const firing = [false, false];
 let resets = 0,
   rejoins = 0;
+let retiredDeathsP2 = 0,
+  retiredRespawnsP2 = 0;
 const startedAt = new Date().toISOString();
 let report: Record<string, unknown> = {};
 async function join(page: Page) {
@@ -72,18 +77,122 @@ async function join(page: Page) {
   await page.waitForFunction(() =>
     window.__derp.diagnostics().status.includes("movement active"),
   );
-  if (jets && !(await read(page)).rules.jetsEnabled) {
-    await page.locator("#jets").click();
-    await page.waitForFunction(
-      () => window.__derp.diagnostics().rules.jetsEnabled,
-    );
-    await page.waitForFunction(() =>
-      window.__derp.diagnostics().status.includes("movement active"),
-    );
-  }
 }
 async function read(page: Page): Promise<any> {
   return page.evaluate(() => window.__derp.diagnostics());
+}
+async function exerciseDuel() {
+  for (const page of pages) {
+    if (!(await read(page)).active) {
+      await page.locator("#viewport").click({ position: { x: 20, y: 20 } });
+      await page.waitForFunction(() => window.__derp.diagnostics().active);
+    }
+  }
+  const first = await Promise.all(pages.map(read));
+  const initialDeaths = first.map(
+    (client) => client.combat.localDeaths as number,
+  );
+  for (let i = 0; i < 2; i++) {
+    await pages[i]!.keyboard.down(i === 0 ? "KeyD" : "KeyA");
+    await pages[i]!.keyboard.down("Space");
+    await pages[i]!.keyboard.down(i === 0 ? "ShiftLeft" : "ShiftRight");
+  }
+  await pages[0]!.waitForFunction(
+    () => (window.__derp.diagnostics().predicted?.x ?? -8) > -1.4,
+    undefined,
+    { timeout: 5000 },
+  );
+  await pages[0]!.keyboard.up("KeyD");
+  await pages[1]!.waitForFunction(
+    () => (window.__derp.diagnostics().predicted?.x ?? 8) < 0.3,
+    undefined,
+    { timeout: 5000 },
+  );
+  await pages[1]!.keyboard.up("KeyA");
+  for (let i = 0; i < 2; i++) {
+    await pages[i]!.keyboard.up("Space");
+    await pages[i]!.keyboard.up(i === 0 ? "ShiftLeft" : "ShiftRight");
+    await pages[i]!.waitForFunction(
+      () => {
+        const state = window.__derp.diagnostics().predicted;
+        return state?.grounded && state.y < 1.1;
+      },
+      undefined,
+      { timeout: 5000 },
+    );
+  }
+  const deadline = performance.now() + 16000;
+  while (performance.now() < deadline) {
+    const state = await Promise.all(pages.map(read));
+    for (let i = 0; i < 2; i++) {
+      const own = state[i];
+      if (firing[i] && !own.combat.trigger) {
+        await pages[i]!.mouse.up({ button: "left" });
+        firing[i] = false;
+      }
+      const target = own.players.find(
+        (player: any) => player.id !== own.playerId,
+      );
+      if (!target || !own.predicted) continue;
+      if (
+        own.predicted.health === 0 ||
+        !own.active ||
+        own.status.includes("Synchronizing")
+      ) {
+        if (firing[i]) {
+          await pages[i]!.mouse.up({ button: "left" });
+          firing[i] = false;
+        }
+        continue;
+      }
+      const travel =
+        Math.hypot(target.x - own.predicted.x, target.y - own.predicted.y) / 36;
+      const aheadX = target.x + target.vx * (travel + 0.05);
+      const aheadY =
+        target.y + target.vy * (travel + 0.05) - 15 * travel * travel;
+      const arena =
+        (await pages[i]!.locator("#viewport canvas").boundingBox())!;
+      await pages[i]!.mouse.move(
+        arena.x +
+          arena.width * Math.min(0.99, Math.max(0.01, (aheadX + 12) / 24)),
+        arena.y +
+          arena.height * Math.min(0.99, Math.max(0.01, 1 - aheadY / 13.5)),
+      );
+      if (!firing[i]) {
+        await pages[i]!.mouse.down({ button: "left" });
+        firing[i] = true;
+      }
+    }
+    if (
+      state.every(
+        (client, index) => client.combat.localDeaths > initialDeaths[index]!,
+      )
+    )
+      break;
+    await sleep(80);
+  }
+  for (let i = 0; i < 2; i++) {
+    if (firing[i]) await pages[i]!.mouse.up({ button: "left" });
+    firing[i] = false;
+  }
+  await sleep(300);
+  const finished = await Promise.all(pages.map(read));
+  if (
+    !finished.every(
+      (client, index) => client.combat.localDeaths > initialDeaths[index]!,
+    )
+  )
+    throw new Error(
+      `Duel cycle missed an elimination: ${JSON.stringify(
+        finished.map((client, index) => ({
+          slot: index + 1,
+          deathsBefore: initialDeaths[index],
+          deathsAfter: client.combat.localDeaths,
+          shots: client.combat.predictedShots,
+          health: client.predicted.health,
+        })),
+      )}`,
+    );
 }
 try {
   let ready = false;
@@ -123,11 +232,32 @@ try {
     pages.push(page);
     await join(page);
   }
+  if (jets) {
+    await pages[0]!.locator("#jets").click();
+    for (const page of pages) {
+      await page.waitForFunction(
+        () => window.__derp.diagnostics().rules.jetsEnabled,
+      );
+      await page.waitForFunction(() =>
+        window.__derp.diagnostics().status.includes("movement active"),
+      );
+    }
+    await pages[0]!.locator("#viewport").click({ position: { x: 20, y: 20 } });
+    await pages[0]!.waitForFunction(() => window.__derp.diagnostics().active);
+  }
   const begin = performance.now();
   for (let step = 0; step < seconds; step++) {
     if (childExit !== undefined) throw new Error("Server exited during soak");
+    if (duel && step % 60 === 1) await exerciseDuel();
     for (let i = 0; i < pages.length; i++) {
       const page = pages[i]!;
+      if (duel) {
+        if (step % 17 === i) {
+          await page.mouse.down({ button: "left" });
+          await page.mouse.up({ button: "left" });
+        }
+        continue;
+      }
       const right = (Math.floor(step / 4) + i) % 2 === 0;
       const arena = (await page.locator("#viewport canvas").boundingBox())!;
       const sweep = ((step * 37 + i * 53) % 101) / 100;
@@ -136,7 +266,7 @@ try {
         arena.x + arena.width * (0.05 + sweep * 0.9),
         arena.y + arena.height * (0.05 + vertical * 0.9),
       );
-      if (carbine) {
+      if (carbine && !duel) {
         const nextFiring = step % 6 < 3;
         if (nextFiring !== firing[i]) {
           if (nextFiring) await page.mouse.down({ button: "left" });
@@ -165,6 +295,11 @@ try {
       resets++;
     }
     if (step % 60 === 40) {
+      if (duel) {
+        const retiring = await read(pages[1]!);
+        retiredDeathsP2 += retiring.combat.localDeaths;
+        retiredRespawnsP2 += retiring.combat.localRespawns;
+      }
       await pages[1]!.close();
       await sleep(150);
       const page = await browsers[1]!.newPage({
@@ -174,6 +309,10 @@ try {
       firing[1] = false;
       lastSequences[1] = 0;
       await join(page);
+      if (jets)
+        await page.waitForFunction(
+          () => window.__derp.diagnostics().rules.jetsEnabled,
+        );
       rejoins++;
     }
     if (step % 5 === 0) {
@@ -206,6 +345,8 @@ try {
         if (
           client.pendingInputs > 120 ||
           client.interpolationDepth > 40 ||
+          client.lifecycleDepth > 120 ||
+          client.combat.pendingEvents > 256 ||
           client.queues.incoming > 256 ||
           client.queues.outgoing > 256 ||
           client.renderer.players > 2 ||
@@ -214,6 +355,10 @@ try {
           client.renderer.reticles !== 1 ||
           client.renderer.projectileSlots !== 12 ||
           client.renderer.effectSlots !== 32 ||
+          client.renderer.materials > 26 ||
+          client.renderer.graphObjects > 70 ||
+          client.resources.listeners > 15 ||
+          client.resources.domElements > 110 ||
           client.combat.provisionals > 16 ||
           client.combat.activeProjectiles > 12 ||
           client.combat.eventGaps !== 0 ||
@@ -274,6 +419,12 @@ try {
     );
   }
   const final = await Promise.all(pages.map(read));
+  const lifeCounts = {
+    deathsP1: final[0].combat.localDeaths,
+    deathsP2: retiredDeathsP2 + final[1].combat.localDeaths,
+    respawnsP1: final[0].combat.localRespawns,
+    respawnsP2: retiredRespawnsP2 + final[1].combat.localRespawns,
+  };
   for (let i = 0; i < pages.length; i++)
     await pages[i]!.screenshot({
       path: resolve(runDirectory, `player-${i + 1}.png`),
@@ -331,15 +482,24 @@ try {
           client.messageBytes.maxIncoming <= 16384 &&
           client.messageBytes.maxOutgoing <= 2048,
       ),
+    duel:
+      !duel ||
+      seconds < 1800 ||
+      Object.values(lifeCounts).every((count) => count >= 30),
     renderer: clients.every(
       (client) =>
         client.renderer.sceneObjects <= 64 &&
         client.renderer.geometries <= 13 &&
+        client.renderer.trackedGeometries <= 20 &&
+        client.renderer.materials <= 26 &&
+        client.renderer.graphObjects <= 70 &&
         client.renderer.directionLines === client.renderer.players &&
         client.renderer.reticles === 1 &&
         client.renderer.projectileSlots === 12 &&
         client.renderer.effectSlots === 32 &&
-        client.renderer.programs <= 6,
+        client.renderer.programs <= 6 &&
+        client.resources.listeners <= 15 &&
+        client.resources.domElements <= 110,
     ),
   };
   report = {
@@ -352,6 +512,8 @@ try {
     profileMemory,
     jets,
     carbine,
+    duel,
+    lifeCounts,
     resets,
     rejoins,
     sourceHash,

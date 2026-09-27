@@ -44,6 +44,10 @@ const stats = {
   playerImpacts: 0,
   expiredProjectiles: 0,
   capacityDrops: 0,
+  damage: 0,
+  deaths: 0,
+  respawns: 0,
+  protectedHits: 0,
 };
 
 function message(room: Room, playerId: string, type: "baseline" | "snapshot") {
@@ -138,7 +142,7 @@ test("segment sweep includes tangents, corners and inside starts with stable nor
   ).toBeUndefined();
 });
 
-test("room emits ordered shot and moving-player impact events without physical damage", () => {
+test("room emits ordered shot and moving-player damage without physical knockback", () => {
   const room = new Room();
   const shooter = room.join("shooter")!;
   const target = room.join("target")!;
@@ -157,6 +161,7 @@ test("room emits ordered shot and moving-player impact events without physical d
     y: 5,
     aimQ: AIM_MIN,
     grounded: false,
+    spawnProtectedUntilTick: 0,
   };
   const targetBefore = { ...target.state };
   const frame = {
@@ -164,6 +169,7 @@ test("room emits ordered shot and moving-player impact events without physical d
     fire: true,
     type: "input" as const,
     inputEpoch: shooter.epoch,
+    lifeId: 1,
     tick: room.tick + 1,
   };
   room.input("shooter", frame);
@@ -194,6 +200,7 @@ test("room emits ordered shot and moving-player impact events without physical d
   });
   expect(target.state.x).toBeCloseTo(targetBefore.x, 6);
   expect(target.state.vx).toBe(targetBefore.vx);
+  expect(target.state.health).toBe(75);
   expect(room.projectileSnapshot()).toHaveLength(0);
   room.dispose();
 });
@@ -213,6 +220,7 @@ test("terrain wins equal-time ties, lifetime expires silently, and reset isolate
     fire: true,
     type: "input",
     inputEpoch: peer.epoch,
+    lifeId: 1,
     tick: 1,
   });
   const blocked = room.step();
@@ -232,6 +240,7 @@ test("terrain wins equal-time ties, lifetime expires silently, and reset isolate
     fire: true,
     type: "input",
     inputEpoch: peer.epoch,
+    lifeId: 1,
     tick: room.tick + 1,
   });
   room.step();
@@ -263,6 +272,7 @@ test("event cursor matches provisionals once and fails closed on gaps", () => {
         eventId: 1,
         projectileId: 1,
         ownerId: "local",
+        ownerLifeId: peer.state.lifeId,
         ownerSlot: 1,
         sourceInputEpoch: peer.epoch,
         sourceTick: 1,
@@ -285,7 +295,7 @@ test("event cursor matches provisionals once and fails closed on gaps", () => {
     combat.receive(
       {
         ...batch,
-        events: [{ ...batch.events[0]!, eventId: 3, projectileId: 2 }],
+        events: [{ ...batch.events[0]!, eventId: 3 }],
       },
       "local",
     ),
@@ -317,13 +327,23 @@ test("muzzle geometry remains outside the player and static room collision is ex
   sim.dispose();
 });
 
-test("projectile-lab room trace validates strictly and replays exactly", () => {
+test("duel room trace validates strictly and replays exactly", () => {
   const trace = combatFixtureTrace();
   expect(parseCombatTrace(trace)).toEqual(trace);
   const first = replayCombatTrace(trace);
   const second = replayCombatTrace(trace);
   expect(second).toEqual(first);
-  expect(first).toHaveLength(180);
+  expect(first).toHaveLength(440);
+  expect(
+    first
+      .flatMap((frame) => frame.events)
+      .filter((event) => event.type === "death"),
+  ).toHaveLength(4);
+  expect(
+    first
+      .flatMap((frame) => frame.events)
+      .filter((event) => event.type === "respawn"),
+  ).toHaveLength(4);
   expect(
     first
       .flatMap((frame) => frame.events)

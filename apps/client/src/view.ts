@@ -25,6 +25,15 @@ export class View {
     new THREE.MeshStandardMaterial({ color: "#dcff63", roughness: 0.65 }),
     new THREE.MeshStandardMaterial({ color: "#ff916c", roughness: 0.65 }),
   ];
+  private deadMaterial = new THREE.MeshStandardMaterial({
+    color: "#777d79",
+    roughness: 0.9,
+  });
+  private shieldMaterial = new THREE.MeshStandardMaterial({
+    color: "#6fe9ff",
+    roughness: 0.55,
+    wireframe: true,
+  });
   private directionGeometry = new THREE.BufferGeometry().setFromPoints([
     new THREE.Vector3(0, 0, 0),
     new THREE.Vector3(1.5, 0, 0),
@@ -97,6 +106,12 @@ export class View {
       opacity: 0.9,
       side: THREE.DoubleSide,
     }),
+    protected: new THREE.MeshBasicMaterial({
+      color: "#6fe9ff",
+      transparent: true,
+      opacity: 0.9,
+      side: THREE.DoubleSide,
+    }),
   };
   private effectMeshes = Array.from(
     { length: CARBINE.effectPoolSize },
@@ -165,6 +180,8 @@ export class View {
     reticleVisible = false,
     projectiles: ProjectileView[] = [],
     effects: EffectView[] = [],
+    renderTick = 0,
+    localTick = renderTick,
   ) {
     const ids = new Set(players.map((player) => player.id));
     for (const [id, mesh] of this.meshes)
@@ -198,12 +215,20 @@ export class View {
         this.labels.set(player.id, label);
       }
       mesh.position.set(player.x, player.y, 0.4);
+      const playerTick = player.id === localId ? localTick : renderTick;
+      mesh.material =
+        player.health === 0
+          ? this.deadMaterial
+          : player.spawnProtectedUntilTick > playerTick
+            ? this.shieldMaterial
+            : this.materials[player.slot - 1]!;
       const direction = this.directions.get(player.id)!;
+      direction.visible = player.health > 0;
       direction.position.set(player.x, player.y, 0.9);
       direction.rotation.z = aimQToRadians(player.aimQ);
       const label = this.labels.get(player.id)!;
-      label.textContent = `P${player.slot}${player.id === localId ? " · LOCAL" : ""}${player.jetActive ? " · JET" : ""}`;
-      label.style.left = `clamp(70px, ${((player.x + 12) / 24) * 100}%, calc(100% - 70px))`;
+      label.textContent = `P${player.slot}${player.id === localId ? " · LOCAL" : ""}${player.health === 0 ? " · OUT" : ` · ${player.health} HP`}${player.spawnProtectedUntilTick > playerTick && player.health > 0 ? " · SHIELDED" : ""}${player.jetActive ? " · JET" : ""}`;
+      label.style.left = `clamp(min(140px, 50%), ${((player.x + 12) / 24) * 100}%, max(calc(100% - 140px), 50%))`;
       label.style.top = `clamp(28px, ${(1 - (player.y + 1.4) / 13.5) * 100}%, calc(100% - 4px))`;
     }
     this.ghost.visible = debug && !!authoritative;
@@ -235,9 +260,11 @@ export class View {
         mesh.material =
           effect.kind === "muzzle"
             ? this.effectMaterials.muzzle
-            : effect.kind === "impact-player"
-              ? this.effectMaterials.player
-              : this.effectMaterials.terrain;
+            : effect.kind === "impact-protected"
+              ? this.effectMaterials.protected
+              : effect.kind === "impact-player"
+                ? this.effectMaterials.player
+                : this.effectMaterials.terrain;
         mesh.position.set(effect.x, effect.y, 1.15);
         mesh.rotation.z = Math.atan2(effect.normalY, effect.normalX);
       }
@@ -262,6 +289,9 @@ export class View {
           materials.add(material);
       }
     });
+    materials.add(this.deadMaterial);
+    materials.add(this.shieldMaterial);
+    materials.add(this.effectMaterials.protected);
     return {
       players: this.meshes.size,
       directionLines: this.directions.size,
@@ -299,6 +329,9 @@ export class View {
     });
     for (const geometry of geometries) geometry.dispose();
     for (const material of materials) material.dispose();
+    this.deadMaterial.dispose();
+    this.shieldMaterial.dispose();
+    this.effectMaterials.protected.dispose();
     this.renderer.dispose();
     for (const label of this.labels.values()) label.remove();
     this.renderer.domElement.remove();

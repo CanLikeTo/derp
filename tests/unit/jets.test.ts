@@ -38,6 +38,10 @@ const stats = {
   playerImpacts: 0,
   expiredProjectiles: 0,
   capacityDrops: 0,
+  damage: 0,
+  deaths: 0,
+  respawns: 0,
+  protectedHits: 0,
 };
 
 test("exactly 45 thrust ticks; exhaustion held on the ground cannot refill or relaunch", () => {
@@ -194,6 +198,7 @@ test("suspend and baseline preserve fuel/momentum; duplicates and epochs add no 
     const input = {
       type: "input" as const,
       inputEpoch: peer.epoch,
+      lifeId: 1,
       tick: 1,
       ...NEUTRAL,
       jetHeld: true,
@@ -290,6 +295,7 @@ test("fuel, rule, input and trace contracts fail closed", () => {
       JSON.stringify({
         type: "input",
         inputEpoch: 1,
+        lifeId: 1,
         tick: 1,
         moveX: 0,
         jumpPressed: false,

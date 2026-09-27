@@ -1,6 +1,21 @@
-# Authoritative carbine playtest
+# Authoritative duel playtest
 
-Status: **pending human playtest**. The earlier aim playtest was explicitly deferred and is not treated as passed. Run this later at 0, 100, and 200 ms added round-trip latency with two windows.
+Status: **pending human playtest**. Test directly on the computer with two connected windows, first at 0 ms added latency, then 100 and 200 ms. The earlier aim and carbine human playtests remain pending.
+
+1. Shoot the unprotected opponent four times. Both windows should agree on the 100 → 75 → 50 → 25 → 0 health sequence, one death, and a two-second countdown.
+2. Keep firing through death. The dead player should stay still, stop taking hits, and not shoot on respawn until the mouse button has been released and pressed again.
+3. After respawn, verify the player appears at the farther valid spawn with full health and one second of protection. A blocked hit should be visibly different; firing should end protection.
+4. Try simultaneous kills and shots already in flight when their owner dies. Compare local confirmed health with the delayed remote death and projectile timing.
+5. Repeat while moving and jetting, then blur, hide, reset, reload, disconnect, reconnect and restart the server during the countdown. No previous-life input or visual effect should reappear.
+6. Export diagnostics after surprises. Record the build, browser, preset, life IDs, event cursor, server death/respawn counters and reproduction steps.
+
+Automated correctness does not establish duel balance or two-human fun. Record those impressions separately.
+
+---
+
+# Authoritative carbine playtest (historical harness)
+
+Status: **pending human playtest**. This guide describes the former harmless-impact carbine harness. The current duel build adds damage, death and respawn; use the duel guide above for current behavior. The earlier aim playtest was explicitly deferred and is not treated as passed.
 
 1. Activate the arena, then tap and hold the primary mouse button while aiming at open space, walls, platforms, and the other player. The first local flash/projectile should precede delayed authority; confirmed impacts must agree with the server.
 2. Confirm automatic cadence is steady while held, released taps do not fire later, the activation click does not fire, and leaving the arena or switching focus cannot leave fire stuck.

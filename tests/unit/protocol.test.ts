@@ -24,6 +24,7 @@ test("runtime validation rejects extra authority, wrong types, and bounds", () =
     jetHeld: false,
     type: "input" as const,
     inputEpoch: 1,
+    lifeId: 1,
     tick: 1,
     moveX: 1 as const,
     jumpPressed: false,
@@ -84,6 +85,10 @@ test("recipient timing payloads require bounded, typed receipts", () => {
       playerImpacts: 0,
       expiredProjectiles: 0,
       capacityDrops: 0,
+      damage: 0,
+      deaths: 0,
+      respawns: 0,
+      protectedHits: 0,
     },
   };
   expect(parseServer(JSON.stringify(baseline))).toEqual(baseline);
@@ -97,6 +102,7 @@ test("recipient timing payloads require bounded, typed receipts", () => {
         eventId: 1,
         projectileId: 1,
         ownerId: "fixture",
+        ownerLifeId: 1,
         ownerSlot: 1 as const,
         sourceInputEpoch: 1,
         sourceTick: 10,

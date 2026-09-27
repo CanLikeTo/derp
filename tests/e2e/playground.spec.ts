@@ -17,6 +17,7 @@ type Diagnostic = {
   active: boolean;
   playerId: string;
   inputEpoch: number;
+  serverTick: number;
   pendingInputs: number;
   predictedTick: number;
   finalizedTick: number;
@@ -24,6 +25,7 @@ type Diagnostic = {
   authoritative?: PlayerState;
   players: { id: string }[];
   resyncs: number;
+  recentEvents: { event: string }[];
   lead: number;
   schedulingJitterMs: number;
   queues: { incoming: number; outgoing: number };
@@ -48,6 +50,15 @@ type Diagnostic = {
     eventGaps: number;
     duplicateEvents: number;
     provisionals: number;
+    localDeaths: number;
+    localRespawns: number;
+    requiresFireRelease: boolean;
+  };
+  life: {
+    health: number;
+    lifeId: number;
+    respawnAtTick: number | null;
+    protectedUntilTick: number;
   };
   corrections: { p95: number };
   aim: {
@@ -101,6 +112,14 @@ async function focus(page: Page) {
   }
   throw new Error("Playground focus did not settle on a stable input epoch");
 }
+async function resetPlayground(page: Page) {
+  await focus(page);
+  await expect(page.locator("#reset")).toBeEnabled();
+  // Keep the canvas focused so focus recovery cannot race reset with a new epoch.
+  await page.evaluate(() =>
+    (document.getElementById("reset") as HTMLButtonElement).click(),
+  );
+}
 async function setJets(page: Page, enabled: boolean) {
   await focus(page);
   if ((await diagnostics(page)).rules.jetsEnabled !== enabled) {
@@ -123,6 +142,48 @@ async function aimAtWorld(page: Page, x: number, y: number) {
   await page.mouse.move(
     canvas.x + ((x + 12) / 24) * canvas.width,
     canvas.y + (1 - y / 13.5) * canvas.height,
+  );
+}
+
+async function positionForDuel(page: Page, interruptAfterFirstBurst = false) {
+  // A fresh baseline clears held keys. Reapply movement in short bursts so a
+  // resync during setup cannot silently leave the shooter at its spawn.
+  for (let attempt = 0; attempt < 24; attempt++) {
+    const state = (await diagnostics(page)).predicted;
+    if (state && state.x > -1 && state.x < 1) {
+      if (state.grounded) return;
+      await page.waitForTimeout(100);
+      continue;
+    }
+    await expect
+      .poll(async () => (await diagnostics(page)).status)
+      .toContain("movement active");
+    const direction = state && state.x >= 1 ? "KeyA" : "KeyD";
+    await page.keyboard.down(direction);
+    await page.keyboard.down("Space");
+    await page.keyboard.down("ShiftLeft");
+    await page.waitForTimeout(150);
+    if (interruptAfterFirstBurst && attempt === 0) {
+      const epoch = (await diagnostics(page)).inputEpoch;
+      await page.evaluate(() => window.__derp.stall());
+      await expect
+        .poll(async () => (await diagnostics(page)).inputEpoch)
+        .toBeGreaterThan(epoch);
+    }
+    await page.keyboard.up(direction);
+    await page.keyboard.up("Space");
+    await page.keyboard.up("ShiftLeft");
+  }
+  const state = await diagnostics(page);
+  throw new Error(
+    `Could not position duel shooter: ${JSON.stringify({
+      x: state.predicted?.x,
+      y: state.predicted?.y,
+      status: state.status,
+      inputEpoch: state.inputEpoch,
+      resyncs: state.resyncs,
+      recentEvents: state.recentEvents,
+    })}`,
   );
 }
 
@@ -239,7 +300,7 @@ test("mouse aim predicts before authority, survives resize and clears on leave",
   }
 });
 
-test("automatic carbine predicts immediately and confirms harmless authoritative impacts", async ({
+test("automatic carbine predicts immediately and confirms authoritative impacts", async ({
   page,
   context,
 }) => {
@@ -310,6 +371,126 @@ test("automatic carbine predicts immediately and confirms harmless authoritative
   expect((await diagnostics(page)).server.capacityDrops).toBe(0);
   await observer.close();
 });
+
+test("local shield label follows confirmed protection and shot cancellation", async ({
+  page,
+}) => {
+  await join(page);
+  await focus(page);
+  const epoch = (await diagnostics(page)).inputEpoch;
+  await resetPlayground(page);
+  await expect
+    .poll(async () => (await diagnostics(page)).inputEpoch)
+    .toBeGreaterThan(epoch);
+  const local = page.locator(".player-label").filter({ hasText: "LOCAL" });
+  const initial = await diagnostics(page);
+  expect(initial.life.protectedUntilTick).toBeGreaterThan(initial.serverTick);
+  await expect(local).toContainText("SHIELDED");
+  await aimAtWorld(page, 0, 6);
+  await page.mouse.down({ button: "left" });
+  await expect
+    .poll(async () => (await diagnostics(page)).server.shots)
+    .toBeGreaterThan(initial.server.shots);
+  await expect
+    .poll(async () => (await diagnostics(page)).life.protectedUntilTick)
+    .toBe(0);
+  await expect(local).not.toContainText("SHIELDED");
+  await page.mouse.up({ button: "left" });
+});
+
+for (const preset of ["local", "routine", "degraded"] as const)
+  test(`confirmed elimination respawns and held fire needs a new press at ${preset} latency`, async ({
+    page,
+    context,
+  }) => {
+    test.setTimeout(60_000);
+    await join(page);
+    const victim = await context.newPage();
+    await join(victim);
+    await page.locator("#latency").selectOption(preset);
+    await victim.locator("#latency").selectOption(preset);
+    await focus(page);
+    await positionForDuel(page, preset === "degraded");
+    const shooter = (await diagnostics(page)).predicted!;
+    expect(shooter.x).toBeGreaterThan(-2);
+    expect(shooter.x).toBeLessThan(2);
+    let killed = false;
+    for (let attempt = 0; attempt < 5 && !killed; attempt++) {
+      await expect
+        .poll(async () => (await diagnostics(page)).status)
+        .toContain("movement active");
+      const target = (await diagnostics(victim)).predicted!;
+      await aimAtWorld(page, target.x, target.y);
+      await page.mouse.down({ button: "left" });
+      try {
+        await expect
+          .poll(async () => (await diagnostics(victim)).combat.localDeaths, {
+            timeout: 4_000,
+          })
+          .toBe(1);
+        killed = true;
+      } catch {
+        // A fresh baseline retires the held trigger. Release it before retrying.
+        await page.mouse.up({ button: "left" });
+      }
+    }
+    if (!killed) {
+      const fired = await diagnostics(page);
+      const hit = await diagnostics(victim);
+      throw new Error(
+        `Duel stalled: ${JSON.stringify({
+          shooter: {
+            active: fired.active,
+            status: fired.status,
+            resyncs: fired.resyncs,
+            recentEvents: fired.recentEvents,
+            inputEpoch: fired.inputEpoch,
+            predictedTick: fired.predictedTick,
+            finalizedTick: fired.finalizedTick,
+            predicted: fired.predicted,
+            combat: fired.combat,
+            server: fired.server,
+          },
+          victim: {
+            predicted: hit.predicted,
+            combat: hit.combat,
+          },
+        })}`,
+      );
+    }
+    const dead = await diagnostics(victim);
+    expect(dead.life.health).toBe(0);
+    expect(dead.life.lifeId).toBe(1);
+    expect(dead.life.respawnAtTick).not.toBeNull();
+    expect(dead.combat.localRespawns).toBe(0);
+    await page.mouse.up({ button: "left" });
+
+    await victim.bringToFront();
+    await victim.locator("#viewport").click({ position: { x: 20, y: 20 } });
+    expect((await diagnostics(victim)).combat.localRespawns).toBe(0);
+    await victim.mouse.down({ button: "left" });
+    const before = (await diagnostics(victim)).combat.predictedShots;
+    await expect
+      .poll(async () => (await diagnostics(victim)).combat.localRespawns, {
+        timeout: 5_000,
+      })
+      .toBe(1);
+    await expect
+      .poll(async () => (await diagnostics(victim)).status)
+      .toContain("movement active");
+    const revived = await diagnostics(victim);
+    expect(revived.life).toMatchObject({ health: 100, lifeId: 2 });
+    expect(revived.combat.requiresFireRelease).toBe(true);
+    await victim.waitForTimeout(350);
+    expect((await diagnostics(victim)).combat.predictedShots).toBe(before);
+    await victim.mouse.up({ button: "left" });
+    await victim.mouse.down({ button: "left" });
+    await expect
+      .poll(async () => (await diagnostics(victim)).combat.predictedShots)
+      .toBeGreaterThan(before);
+    await victim.mouse.up({ button: "left" });
+    await victim.close();
+  });
 test("two identities, movement, third rejection, reset and released seat", async ({
   page,
   context,
@@ -348,7 +529,7 @@ test("two identities, movement, third rejection, reset and released seat", async
   await expectLabelInsideArena(second, 2);
   await focus(page);
   const oldEpoch = (await diagnostics(page)).inputEpoch;
-  await page.locator("#reset").click();
+  await resetPlayground(page);
   await expect
     .poll(async () => (await diagnostics(page)).inputEpoch)
     .toBeGreaterThan(oldEpoch);
@@ -395,7 +576,7 @@ test("prediction precedes acknowledgement; latency, correction, blur and stall r
       })
       .toBeLessThan(0.0001);
     expect((await diagnostics(page)).pendingInputs).toBeLessThanOrEqual(120);
-    await page.locator("#reset").click();
+    await resetPlayground(page);
     await focus(page);
   }
   await page.keyboard.down("KeyD");
@@ -841,7 +1022,7 @@ test("two players confirm jet mode; predicted fuel responds under latency and su
       .toBeGreaterThan(epoch);
     expect((await diagnostics(page)).predicted!.jetActive).toBe(false);
     await page.keyboard.up("ShiftRight");
-    await page.locator("#reset").click();
+    await resetPlayground(page);
     await focus(page);
     expect((await diagnostics(page)).rules.jetsEnabled).toBe(true);
     await expect
