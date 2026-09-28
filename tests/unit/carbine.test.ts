@@ -211,7 +211,7 @@ test("terrain wins equal-time ties, lifetime expires silently, and reset isolate
   room.baseline("a");
   peer.state = {
     ...peer.state,
-    x: 11.55,
+    x: 35.55,
     y: 5,
     aimQ: 0,
   };
@@ -314,7 +314,7 @@ test("muzzle geometry remains outside the player and static room collision is ex
     { jetsEnabled: false },
   );
   expect(fired.shotAuthorized).toBe(true);
-  const rightWall = ROOM.solids[3]!;
+  const rightWall = ROOM.solids.find((solid) => solid.x === 36.5)!;
   expect(
     sweepSegmentAabb(
       { x: rightWall.x - 2, y: rightWall.y },

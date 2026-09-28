@@ -3,6 +3,9 @@ import {
   AIM_MAX,
   AIM_MIN,
   AIM_QUARTER_TURN,
+  DISABLED_RULES,
+  DT,
+  MOVEMENT,
   Simulation,
   aimQFromVector,
   aimQToDegrees,
@@ -14,7 +17,13 @@ import {
   wrapAimQ,
 } from "@derp/simulation";
 import { emptyInputTiming, type StateMessage } from "@derp/protocol";
-import { PointerAim, pointerToWorld } from "../../apps/client/src/input";
+import { cameraBounds, type CameraBounds } from "../../apps/client/src/camera";
+import {
+  PointerAim,
+  pointerToWorld,
+  samplePredictedAim,
+  type WorldPoint,
+} from "../../apps/client/src/input";
 import { Interpolation, Prediction } from "../../apps/client/src/prediction";
 import { Room } from "../../apps/server/src/room";
 
@@ -63,14 +72,89 @@ test("signed aim math covers cardinals, wrapping and deterministic antipodes", (
   );
 });
 
-test("canvas coordinates map to fixed world corners without DPR input", () => {
+test("canvas coordinates map through the central view without DPR input", () => {
   const rect = { left: 100, top: 50, width: 800, height: 450 };
-  expect(pointerToWorld(100, 50, rect)).toEqual({ x: -12, y: 13.5 });
-  expect(pointerToWorld(900, 500, rect)).toEqual({ x: 12, y: 0 });
-  expect(pointerToWorld(500, 275, rect)).toEqual({ x: 0, y: 6.75 });
-  expect(pointerToWorld(99, 50, rect)).toBeUndefined();
-  expect(pointerToWorld(100, 50, { ...rect, width: 0 })).toBeUndefined();
+  const bounds = cameraBounds();
+  expect(pointerToWorld(100, 50, rect, bounds)).toEqual({ x: -12, y: 13.5 });
+  expect(pointerToWorld(900, 500, rect, bounds)).toEqual({ x: 12, y: 0 });
+  expect(pointerToWorld(500, 275, rect, bounds)).toEqual({ x: 0, y: 6.75 });
+  expect(pointerToWorld(99, 50, rect, bounds)).toBeUndefined();
+  expect(
+    pointerToWorld(100, 50, { ...rect, width: 0 }, bounds),
+  ).toBeUndefined();
 });
+
+test("five predicted ticks in one frame keep a stationary cursor on the player's left", () => {
+  const rect = { left: 10, top: 20, width: 960, height: 540 };
+  const canvas = {
+    getBoundingClientRect: () => rect,
+  } as HTMLCanvasElement;
+  const pointer = new PointerAim();
+  const simulation = new Simulation();
+  let state = spawnState("catch-up", 1);
+  let settled = false;
+  for (let tick = 0; tick < 180; tick++) {
+    const next = simulation.step(
+      state,
+      neutralInput(state.aimQ),
+      DISABLED_RULES,
+    );
+    settled = next.grounded && Math.abs(next.y - state.y) < 1e-5;
+    state = next;
+    if (settled) break;
+  }
+  expect(settled).toBe(true);
+  expect(state.x).toBeCloseTo(-8, 4);
+  state = { ...state, carbineCooldownTicksRemaining: 5 };
+  const cursor = clientPoint(rect, cameraBounds(state), {
+    x: state.x - 0.2,
+    y: state.y,
+  });
+  pointer.update(cursor.clientX, cursor.clientY);
+  let authorized: number | undefined;
+  for (let tick = 0; tick < 5; tick++) {
+    const aim = samplePredictedAim(pointer, canvas, state, state);
+    const expected = pointerToWorld(
+      cursor.clientX,
+      cursor.clientY,
+      rect,
+      cameraBounds(state),
+    )!;
+    expect(aim.target).toEqual(expected);
+    expect(expected.x).toBeCloseTo(state.x - 0.2, 5);
+    expect(aim.aimQ).toBe(
+      aimQFromVector(expected.x - state.x, expected.y - state.y),
+    );
+    expect(aim.aimQ).toBe(AIM_MIN);
+    const result = simulation.stepWithActions(
+      state,
+      { ...neutralInput(aim.aimQ), moveX: -1, fire: true },
+      DISABLED_RULES,
+    );
+    if (result.shotAuthorized) authorized = result.state.aimQ;
+    state = result.state;
+  }
+  simulation.dispose();
+  expect(state.x).toBeCloseTo(-8 - MOVEMENT.speed * DT * 5, 4);
+  expect(state.x).toBeCloseTo(-8.6667, 3);
+  expect(authorized).toBe(AIM_MIN);
+  const shown = samplePredictedAim(pointer, canvas, state, state);
+  expect(shown.target!.x).toBeCloseTo(-8.8667, 3);
+  expect(shown.aimQ).toBe(AIM_MIN);
+});
+
+function clientPoint(
+  rect: { left: number; top: number; width: number; height: number },
+  bounds: CameraBounds,
+  world: WorldPoint,
+) {
+  const u = (world.x - bounds.left) / (bounds.right - bounds.left);
+  const v = (bounds.top - world.y) / (bounds.top - bounds.bottom);
+  return {
+    clientX: rect.left + u * rect.width,
+    clientY: rect.top + v * rect.height,
+  };
+}
 
 test("dead zone holds the prior aim and aim-only ticks cannot alter movement", () => {
   const pointer = new PointerAim();

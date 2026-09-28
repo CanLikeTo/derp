@@ -49,9 +49,9 @@ export function jetTraces(): Record<string, Trace> {
       { ...NEUTRAL, jumpPressed: true, jetHeld: true },
       ...held(50),
     ]),
-    roof: trace({ y: 12.08, vy: 12, grounded: false }, held(80)),
+    roof: trace({ y: 25.58, vy: 12, grounded: false }, held(80)),
     wall: trace(
-      { x: 11.58, y: 5, grounded: false },
+      { x: 35.58, y: 5, grounded: false },
       Array.from({ length: 80 }, () => ({
         ...NEUTRAL,
         moveX: 1,

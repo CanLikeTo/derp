@@ -18,7 +18,7 @@ Combat events are ordered separately from replaceable state snapshots through a 
 
 The current fuel-limited jet rules are retained. The next slice adds mouse-only absolute 360-degree aim without firing, weapons, body rotation or collider changes. Aim travels in the existing tick-addressed input frame as signed 16-bit `aimQ`; no pointer-coordinate or separate aim-message path is introduced. Missing input preserves the last authoritative angle while neutralizing movement, jump and thrust.
 
-The canvas's live CSS rectangle maps the pointer into the fixed world view. Each predicted tick derives its own angle from that world target and predicted player position. Local correction is immediate and measured at the matching tick; remote aim interpolates over the same historical snapshots as remote position. Direction lines and the local reticle are presentation-only, preallocated/bounded resources.
+The canvas's live CSS rectangle maps the pointer through the player-following camera. Each predicted tick derives its own angle from that world target and predicted player position. Local correction is immediate and measured at the matching tick; remote aim interpolates over the same historical snapshots as remote position. Direction lines and the local reticle are presentation-only, preallocated/bounded resources.
 
 ## Scope and dependencies
 

@@ -58,11 +58,11 @@ test("floor, wall, ceiling and ledge collisions; restoration after teleport", ()
   for (let i = 0; i < 120; i++)
     state = sim.step(state, NEUTRAL, { jetsEnabled: false });
   expect(state.y).toBeCloseTo(2.4101, 3);
-  state = { ...state, x: 11, y: 0.92, vy: 0 };
+  state = { ...state, x: 35, y: 0.92, vy: 0 };
   for (let i = 0; i < 60; i++)
     state = sim.step(state, { ...NEUTRAL, moveX: 1 }, { jetsEnabled: false });
-  expect(state.x).toBeLessThan(11.601);
-  expect(state.x).toBeGreaterThan(11.58);
+  expect(state.x).toBeLessThan(35.601);
+  expect(state.x).toBeGreaterThan(35.58);
   sim.dispose();
 });
 test("replay resumes exactly from a saved state with stale physics state replaced", () => {

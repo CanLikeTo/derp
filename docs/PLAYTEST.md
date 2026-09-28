@@ -35,7 +35,7 @@ Status: **pending human playtest**. Run `bun run dev` directly on the computer, 
 1. Sweep the mouse through all four quadrants and cross the left-facing wrap repeatedly. The local line and reticle should follow immediately without changing movement.
 2. Aim while running, reversing, jumping, falling, landing and jetting. The direction line must stay anchored to the rendered box and must not rotate the collider.
 3. Watch the other window. Remote direction changes should stay attached to the interpolated remote pose and take the shortest visible route around the wrap.
-4. Resize the browser narrow and wide, scroll the page, and try browser zoom. The reticle must remain under the pointer inside the fixed arena.
+4. Resize the browser narrow and wide, scroll the page, and try browser zoom. The reticle must remain under the pointer while the camera follows the local player.
 5. Move within roughly 0.1 world units of the local player's centre. The reticle should hide and the prior direction should remain stable rather than flicker.
 6. Leave the arena, switch windows, hide/restore the tab, reset, toggle jet mode, reload and reconnect. No stale pointer direction may continue after focus loss. P1 should respawn facing right and P2 left.
 7. Enable the server ghost. Its line is historical authoritative aim, so separation from the predicted local line under latency is expected.
@@ -51,7 +51,7 @@ Status: **retained by product decision on 1 September 2026**. This records the c
 
 1. Hold either Shift key for a short burst. Fuel lasts 0.75 seconds of thrust. Releasing Shift removes acceleration but keeps upward momentum.
 2. Exhaust the fuel and keep Shift held through landing: it must stay empty. Release both Shift keys on the ground to refill. Try holding both and releasing only one.
-3. Combine Space and Shift. Test the low ceiling and the room roof, and hold into a wall. Labels should stay visible. Ceiling contact still spends fuel.
+3. Combine Space and Shift. Climb toward the room roof and hold into a wall. Visible labels should stay inside the view; players outside the camera lose their labels. Ceiling contact still spends fuel.
 4. Compare ordinary jumps with jets off/on. Are short bursts useful without making platforms, landing and normal jumps irrelevant?
 5. Repeat under the 100 ms and 200 ms added-RTT presets. Local fuel/movement should respond before delayed server confirmation; the other window should show the historical `JET` marker with its pose.
 6. Switch focus while thrusting, reset, reconnect, and toggle jets from the other window. There should be no stale thrust. Reset preserves mode; restarting Bun disables jets.

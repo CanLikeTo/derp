@@ -9,7 +9,7 @@ For later releases, change the protocol version when message semantics become in
 The browser sends a hello after the WebSocket opens:
 
 ```json
-{"type":"hello","protocol":7,"content":"playground-6"}
+{"type":"hello","protocol":7,"content":"playground-7"}
 ```
 
 Only the server chooses the player UUID and slot. A compatible hello either receives a `baseline`, or a `rejected` message followed by closure. There are two player seats and eight total pending/live socket slots. Sending input before admission is invalid.
@@ -26,7 +26,7 @@ Before enabling movement, the client measures three round trips, then requests a
 
 An input is one tick of intent for the assigned player, current epoch and current life. `moveX` is exactly -1, 0 or 1. The jump flag is a press edge, `fire` is held automatic intent, and `aimQ` is a required signed 16-bit direction. Clients cannot send elapsed time, positions, health, damage, velocities, cursor coordinates, projectile state, or a target player. Unknown fields are rejected.
 
-## Authoritative duel (protocol 7 / content playground-6 / trace 6)
+## Authoritative duel (protocol 7 / content playground-7 / trace 6)
 
 Every player starts with 100 health. A confirmed carbine collision applies 25 damage once. Protection absorbs a projectile with zero damage. At zero health the player freezes and becomes untargetable until the start of death tick plus 120; a new life begins at the farther of the two verified spawns. Protection is active on the first 60 ticks of that life and ends before collision tests on its first authorized firing attempt. Both players may die in the same tick. A projectile keeps the originating player ID and life ID even if its owner dies or disconnects.
 
@@ -54,7 +54,7 @@ Prediction error is the distance between the saved predicted state at T and auth
 
 Aim has 65,536 quantization steps per turn. Angles wrap into -32768 through 32767; an exact half-turn follows the negative, clockwise path. P1 spawns facing right and P2 left. Reset and jet-mode changes restore those spawn directions. Baselines, suspension and resynchronization preserve current authoritative aim unless the action also respawns players.
 
-The browser maps the live renderer-canvas rectangle into the fixed 24 by 13.5 world view. It sends no pointer events or coordinates over the network: each predicted tick converts the current world target relative to that tick's predicted player position and includes only `aimQ` in the normal input frame. A target within 0.1 world units retains the prior direction. Aim never changes collision, movement, jump eligibility or fuel.
+The browser maps the live renderer-canvas rectangle through the current 24 by 13.5 camera view. That view follows the rendered local player, including reconciliation smoothing, and stops at the edges of the 72 by 27 world. With no local player it shows the original central frame. It sends no pointer events or coordinates over the network: each predicted tick converts the current world target relative to that tick's predicted player position and includes only `aimQ` in the normal input frame. A target within 0.1 world units retains the prior direction. Aim never changes collision, movement, jump eligibility or fuel.
 
 Local reconciliation restores authoritative aim and replays only inputs newer than the finalized snapshot. Remote aim uses the same before/after snapshots and historical render tick as remote position, interpolating the shortest arc. Buffer underruns hold both pose and aim; there is no extrapolation. Build ID: `playground-aim-v1`. The diagnostic envelope remains version 1.
 
@@ -121,6 +121,6 @@ Existing jump/buffer eligibility runs first, then thrust; a valid simultaneous j
 
 Suspend/resync preserve fuel and momentum but clear held input, pending replay and activity. Later neutral simulation ticks may legitimately refill a grounded player; creating a baseline itself never grants fuel. Duplicates and expired input never add simulation time. Reconnection creates a fresh full-fuel spawn.
 
-A shared solid roof at `(0,13.25)`, size `24×0.5`, contains both modes. Labels clamp inside the view. The local fuel meter uses prediction; remote `JET` text uses the same historical interpolation interval as its pose. Diagnostics export rules, jet configuration, fuel/activity and separate ordinary/thrust correction summaries. No particles, audio or additional player meshes are created.
+A shared solid roof at `(0,26.75)`, size `72×0.5`, contains both modes. Labels use the same camera bounds: offscreen players are hidden, and visible labels still clamp inside the view. The local fuel meter uses prediction; remote `JET` text uses the same historical interpolation interval as its pose. Diagnostics export rules, jet configuration, fuel/activity and separate ordinary/thrust correction summaries. No particles, audio or additional player meshes are created.
 
 Build `playground-jets-v2` additionally measures browser timer lateness on both delayed queues. The largest of the last 120 samples, each clamped to 0–250 ms, is added to preset jitter in the lead formula. Diagnostics expose `schedulingJitterMs`; generation records include it, and `scheduling` records explain resulting lead increases. Samples clear on disconnect or preset changes. The live lead still never shrinks and remains 2–12 ticks. This changes only the client's estimate of required deadline margin, not the wire protocol, authority, simulation delta-time or server future window. `bun tools/timing.ts` saves fixed/measured repeated-stall controls alongside the earlier regressions.

@@ -152,11 +152,26 @@ async function exerciseDuel() {
         target.y + target.vy * (travel + 0.05) - 15 * travel * travel;
       const arena =
         (await pages[i]!.locator("#viewport canvas").boundingBox())!;
+      const camera = own.camera;
       await pages[i]!.mouse.move(
         arena.x +
-          arena.width * Math.min(0.99, Math.max(0.01, (aheadX + 12) / 24)),
+          arena.width *
+            Math.min(
+              0.99,
+              Math.max(
+                0.01,
+                (aheadX - camera.left) / (camera.right - camera.left),
+              ),
+            ),
         arena.y +
-          arena.height * Math.min(0.99, Math.max(0.01, 1 - aheadY / 13.5)),
+          arena.height *
+            Math.min(
+              0.99,
+              Math.max(
+                0.01,
+                (camera.top - aheadY) / (camera.top - camera.bottom),
+              ),
+            ),
       );
       if (!firing[i]) {
         await pages[i]!.mouse.down({ button: "left" });
@@ -356,7 +371,7 @@ try {
           client.renderer.projectileSlots !== 12 ||
           client.renderer.effectSlots !== 32 ||
           client.renderer.materials > 26 ||
-          client.renderer.graphObjects > 70 ||
+          client.renderer.graphObjects > 126 ||
           client.resources.listeners > 15 ||
           client.resources.domElements > 110 ||
           client.combat.provisionals > 16 ||
@@ -488,11 +503,11 @@ try {
       Object.values(lifeCounts).every((count) => count >= 30),
     renderer: clients.every(
       (client) =>
-        client.renderer.sceneObjects <= 64 &&
-        client.renderer.geometries <= 13 &&
-        client.renderer.trackedGeometries <= 20 &&
+        client.renderer.sceneObjects <= 92 &&
+        client.renderer.geometries <= 41 &&
+        client.renderer.trackedGeometries <= 76 &&
         client.renderer.materials <= 26 &&
-        client.renderer.graphObjects <= 70 &&
+        client.renderer.graphObjects <= 126 &&
         client.renderer.directionLines === client.renderer.players &&
         client.renderer.reticles === 1 &&
         client.renderer.projectileSlots === 12 &&

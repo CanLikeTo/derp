@@ -4,6 +4,7 @@ import {
   type Input,
   type PlayerState,
 } from "@derp/simulation";
+import { cameraBounds, type CameraBounds } from "./camera";
 
 export type WorldPoint = { x: number; y: number };
 
@@ -11,12 +12,16 @@ export function pointerToWorld(
   clientX: number,
   clientY: number,
   rect: Pick<DOMRect, "left" | "top" | "width" | "height">,
+  bounds: CameraBounds,
 ): WorldPoint | undefined {
   if (rect.width <= 0 || rect.height <= 0) return;
   const u = (clientX - rect.left) / rect.width;
   const v = (clientY - rect.top) / rect.height;
   if (u < 0 || u > 1 || v < 0 || v > 1) return;
-  return { x: -12 + 24 * u, y: 13.5 - 13.5 * v };
+  return {
+    x: bounds.left + (bounds.right - bounds.left) * u,
+    y: bounds.top - (bounds.top - bounds.bottom) * v,
+  };
 }
 
 export class PointerAim {
@@ -27,12 +32,16 @@ export class PointerAim {
   clear() {
     this.point = undefined;
   }
-  target(canvas: HTMLCanvasElement): WorldPoint | undefined {
+  target(
+    canvas: HTMLCanvasElement,
+    bounds: CameraBounds,
+  ): WorldPoint | undefined {
     if (!this.point) return;
     return pointerToWorld(
       this.point.clientX,
       this.point.clientY,
       canvas.getBoundingClientRect(),
+      bounds,
     );
   }
   sample(state: PlayerState, target: WorldPoint | undefined) {
@@ -46,6 +55,17 @@ export class PointerAim {
   get valid() {
     return !!this.point;
   }
+}
+
+/** Aim for the tick about to run. The camera follows `rendered`, so call this again after every predicted move. */
+export function samplePredictedAim(
+  pointer: PointerAim,
+  canvas: HTMLCanvasElement,
+  rendered: { x: number; y: number } | undefined,
+  state: PlayerState,
+) {
+  const target = pointer.target(canvas, cameraBounds(rendered));
+  return { target, ...pointer.sample(state, target) };
 }
 export class Controls {
   private held = new Set<string>();

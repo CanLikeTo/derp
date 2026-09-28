@@ -63,7 +63,7 @@ Blur/visibility loss clears input, pending prediction and buffered jump intent, 
 
 ## Measurements and limitations
 
-Use **Export diagnostics** to download a bounded local JSON record with timing samples, combat/event counters, environment details, and a replayable pending-input trace. It includes health/life state, projectile/effect resource counts, message-byte maxima, carbine cooldown, aim corrections, room generation/event cursor, room rules, jet state, input outcomes, and correlated timing records. Player traces require version 6 / content `playground-6`; the separate room replay uses `duel-lab-1`. Records stay local.
+Use **Export diagnostics** to download a bounded local JSON record with timing samples, combat/event counters, environment details, and a replayable pending-input trace. It includes health/life state, projectile/effect resource counts, message-byte maxima, carbine cooldown, aim corrections, room generation/event cursor, room rules, jet state, input outcomes, and correlated timing records. Player traces require version 6 / content `playground-7`; the separate room replay uses `duel-lab-1`. Records stay local.
 
 Generated test reports and screenshots are under `artifacts/`; each soak writes `report.json`, `timing.jsonl`, screenshots and its log into a unique `artifacts/<build>-soak-<seconds>s-<timestamp>/` directory; Playwright failures also keep traces in `test-results/`. The soak checks queue/entity bounds, error counts, correction and traffic budgets, and post-warm-up memory. Its 32 MiB median-growth alarm is an investigation trigger, not a proof that every leak is absent. Inspect the time series as well as the pass/fail result.
 

@@ -7,6 +7,7 @@ import {
   type PlayerState,
 } from "@derp/simulation";
 import type { ProjectileView } from "@derp/protocol";
+import type { CameraBounds } from "./camera";
 import type { WorldPoint } from "./input";
 import type { EffectView } from "./combat";
 export class View {
@@ -133,6 +134,7 @@ export class View {
       color: "#55695b",
       roughness: 0.9,
     });
+    const outlineMaterial = new THREE.LineBasicMaterial({ color: "#c8ff9a" });
     for (const solid of ROOM.solids) {
       const geometry = new THREE.BoxGeometry(solid.width, solid.height, 1.2);
       const mesh = new THREE.Mesh(geometry, terrain);
@@ -140,14 +142,19 @@ export class View {
       this.scene.add(mesh);
       const outline = new THREE.LineSegments(
         new THREE.EdgesGeometry(geometry),
-        new THREE.LineBasicMaterial({ color: "#c8ff9a" }),
+        outlineMaterial,
       );
       outline.position.copy(mesh.position);
       this.outlines.add(outline);
     }
-    const grid = new THREE.GridHelper(24, 24, "#28392e", "#1d2b22");
+    const grid = new THREE.GridHelper(
+      ROOM.width,
+      ROOM.width,
+      "#28392e",
+      "#1d2b22",
+    );
     grid.rotation.x = Math.PI / 2;
-    grid.position.set(0, 6, -1);
+    grid.position.set(0, ROOM.height / 2, -1);
     this.scene.add(grid);
     this.scene.add(
       this.ghost,
@@ -176,6 +183,7 @@ export class View {
     localId: string,
     authoritative: PlayerState | undefined,
     debug: boolean,
+    bounds: CameraBounds,
     reticleTarget?: WorldPoint,
     reticleVisible = false,
     projectiles: ProjectileView[] = [],
@@ -183,6 +191,13 @@ export class View {
     renderTick = 0,
     localTick = renderTick,
   ) {
+    this.camera.left = bounds.left;
+    this.camera.right = bounds.right;
+    this.camera.top = bounds.top;
+    this.camera.bottom = bounds.bottom;
+    this.camera.updateProjectionMatrix();
+    const spanX = bounds.right - bounds.left;
+    const spanY = bounds.top - bounds.bottom;
     const ids = new Set(players.map((player) => player.id));
     for (const [id, mesh] of this.meshes)
       if (!ids.has(id)) {
@@ -228,8 +243,18 @@ export class View {
       direction.rotation.z = aimQToRadians(player.aimQ);
       const label = this.labels.get(player.id)!;
       label.textContent = `P${player.slot}${player.id === localId ? " · LOCAL" : ""}${player.health === 0 ? " · OUT" : ` · ${player.health} HP`}${player.spawnProtectedUntilTick > playerTick && player.health > 0 ? " · SHIELDED" : ""}${player.jetActive ? " · JET" : ""}`;
-      label.style.left = `clamp(min(140px, 50%), ${((player.x + 12) / 24) * 100}%, max(calc(100% - 140px), 50%))`;
-      label.style.top = `clamp(28px, ${(1 - (player.y + 1.4) / 13.5) * 100}%, calc(100% - 4px))`;
+      const onScreen =
+        player.x >= bounds.left &&
+        player.x <= bounds.right &&
+        player.y >= bounds.bottom &&
+        player.y <= bounds.top;
+      label.hidden = !onScreen;
+      if (onScreen) {
+        const u = (player.x - bounds.left) / spanX;
+        const v = (bounds.top - (player.y + 1.4)) / spanY;
+        label.style.left = `clamp(min(140px, 50%), ${u * 100}%, max(calc(100% - 140px), 50%))`;
+        label.style.top = `clamp(28px, ${v * 100}%, calc(100% - 4px))`;
+      }
     }
     this.ghost.visible = debug && !!authoritative;
     this.ghostDirection.visible = debug && !!authoritative;

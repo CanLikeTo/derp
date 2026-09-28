@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { parseTrace, BUILD_ID, PROTOCOL_VERSION } from "@derp/protocol";
 import { test, expect, type Page } from "@playwright/test";
+import { cameraBounds } from "../../apps/client/src/camera";
 import {
   initializePhysics,
   fixtureTrace,
@@ -61,9 +62,11 @@ type Diagnostic = {
     protectedUntilTick: number;
   };
   corrections: { p95: number };
+  camera: { left: number; right: number; bottom: number; top: number };
   aim: {
     pointerValid: boolean;
     reticleVisible: boolean;
+    target?: { x: number; y: number };
     predictedQ?: number;
     authoritativeQ?: number;
     correctionSteps: number;
@@ -139,10 +142,40 @@ async function expectLabelInsideArena(page: Page, slot: number) {
 
 async function aimAtWorld(page: Page, x: number, y: number) {
   const canvas = (await page.locator("#viewport canvas").boundingBox())!;
-  await page.mouse.move(
-    canvas.x + ((x + 12) / 24) * canvas.width,
-    canvas.y + (1 - y / 13.5) * canvas.height,
+  const camera = (await diagnostics(page)).camera;
+  const u = Math.min(
+    0.99,
+    Math.max(0.01, (x - camera.left) / (camera.right - camera.left)),
   );
+  const v = Math.min(
+    0.99,
+    Math.max(0.01, (camera.top - y) / (camera.top - camera.bottom)),
+  );
+  await page.mouse.move(
+    canvas.x + u * canvas.width,
+    canvas.y + v * canvas.height,
+  );
+}
+
+async function runIntoWall(page: Page, direction: "KeyA" | "KeyD") {
+  await focus(page);
+  await page.keyboard.down(direction);
+  const goal = direction === "KeyA" ? -35.58 : 35.58;
+  const deadline = Date.now() + 12_000;
+  let x = (await diagnostics(page)).predicted!.x;
+  while (
+    (direction === "KeyA" ? x > goal : x < goal) &&
+    Date.now() < deadline
+  ) {
+    await page.keyboard.down("Space");
+    await page.keyboard.up("Space");
+    await page.waitForTimeout(250);
+    x = (await diagnostics(page)).predicted!.x;
+  }
+  await page.keyboard.up(direction);
+  await page.keyboard.up("Space");
+  if (direction === "KeyA") expect(x).toBeLessThan(goal);
+  else expect(x).toBeGreaterThan(goal);
 }
 
 async function positionForDuel(page: Page, interruptAfterFirstBurst = false) {
@@ -480,6 +513,11 @@ for (const preset of ["local", "routine", "degraded"] as const)
       .toContain("movement active");
     const revived = await diagnostics(victim);
     expect(revived.life).toMatchObject({ health: 100, lifeId: 2 });
+    expect(revived.camera.bottom).toBeCloseTo(0, 2);
+    expect((revived.camera.left + revived.camera.right) / 2).toBeCloseTo(
+      revived.predicted!.x,
+      1,
+    );
     expect(revived.combat.requiresFireRelease).toBe(true);
     await victim.waitForTimeout(350);
     expect((await diagnostics(victim)).combat.predictedShots).toBe(before);
@@ -514,18 +552,9 @@ test("two identities, movement, third rejection, reset and released seat", async
     .poll(async () => (await diagnostics(page)).predicted!.x)
     .toBeGreaterThan(before + 0.3);
   await page.keyboard.up("KeyD");
-  await page.keyboard.down("KeyA");
-  await expect
-    .poll(async () => (await diagnostics(page)).predicted!.x)
-    .toBeLessThan(-11.58);
-  await page.keyboard.up("KeyA");
+  await runIntoWall(page, "KeyA");
   await expectLabelInsideArena(page, 1);
-  await focus(second);
-  await second.keyboard.down("KeyD");
-  await expect
-    .poll(async () => (await diagnostics(second)).predicted!.x)
-    .toBeGreaterThan(11.58);
-  await second.keyboard.up("KeyD");
+  await runIntoWall(second, "KeyD");
   await expectLabelInsideArena(second, 2);
   await focus(page);
   const oldEpoch = (await diagnostics(page)).inputEpoch;
@@ -895,7 +924,7 @@ test("jet traces match Bun including every fuel tick and collision; roof labels 
   await join(page);
   await focus(page);
   await setJets(page, true);
-  // Move away from the ceiling fixture before the combined launch.
+  // Leave the spawn column before the combined launch.
   await page.keyboard.down("KeyA");
   await page.waitForTimeout(600);
   await page.keyboard.up("KeyA");
@@ -1060,4 +1089,120 @@ test("two players confirm jet mode; predicted fuel responds under latency and su
   } finally {
     await otherContext.close();
   }
+});
+
+test("camera follows each local player, keeps zoom, and realigns a stationary pointer", async ({
+  page,
+  context,
+}) => {
+  test.setTimeout(60_000);
+  await join(page);
+  const other = await context.newPage();
+  await join(other);
+  const first = await diagnostics(page);
+  const second = await diagnostics(other);
+  for (const data of [first, second]) {
+    expect(data.camera.right - data.camera.left).toBeCloseTo(24, 5);
+    expect(data.camera.top - data.camera.bottom).toBeCloseTo(13.5, 5);
+  }
+  expect((first.camera.left + first.camera.right) / 2).toBeCloseTo(
+    first.predicted!.x,
+    2,
+  );
+  expect((second.camera.left + second.camera.right) / 2).toBeCloseTo(
+    second.predicted!.x,
+    2,
+  );
+  expect(first.camera.left).not.toBeCloseTo(second.camera.left, 0);
+
+  await focus(page);
+  const canvas = (await page.locator("#viewport canvas").boundingBox())!;
+  await page.mouse.move(
+    canvas.x + canvas.width * 0.8,
+    canvas.y + canvas.height * 0.3,
+  );
+  await expect
+    .poll(async () => (await diagnostics(page)).aim.pointerValid)
+    .toBe(true);
+  await page.keyboard.down("KeyD");
+  await expect
+    .poll(async () => (await diagnostics(page)).predicted!.x)
+    .toBeGreaterThan(first.predicted!.x + 1);
+  const moving = await diagnostics(page);
+  const spanX = moving.camera.right - moving.camera.left;
+  const spanY = moving.camera.top - moving.camera.bottom;
+  expect((moving.aim.target!.x - moving.camera.left) / spanX).toBeCloseTo(
+    0.8,
+    1,
+  );
+  expect((moving.camera.top - moving.aim.target!.y) / spanY).toBeCloseTo(
+    0.3,
+    1,
+  );
+  expect(spanX).toBeCloseTo(24, 5);
+  expect(spanY).toBeCloseTo(13.5, 5);
+  await page.keyboard.up("KeyD");
+
+  await runIntoWall(page, "KeyA");
+  await expect(page.locator(".player-label.p2")).toBeHidden();
+  await expectLabelInsideArena(page, 1);
+  await expect(other.locator(".player-label.p1")).toBeHidden();
+
+  const beforeReset = (await diagnostics(page)).predicted!.x;
+  await expect(page.locator("#reset")).toBeEnabled();
+  const snapped = await page.evaluate((before) => {
+    (document.getElementById("reset") as HTMLButtonElement).click();
+    return new Promise<{ x: number; left: number; right: number }>(
+      (resolve) => {
+        const watch = () => {
+          const data = window.__derp.diagnostics();
+          const x = data.predicted?.x;
+          if (x !== undefined && Math.abs(x - before) > 4)
+            resolve({
+              x,
+              left: data.camera.left,
+              right: data.camera.right,
+            });
+          else requestAnimationFrame(watch);
+        };
+        requestAnimationFrame(watch);
+      },
+    );
+  }, beforeReset);
+  expect((snapped.left + snapped.right) / 2).toBeCloseTo(snapped.x, 1);
+
+  await setJets(page, true);
+  await page.keyboard.down("KeyA");
+  await page.waitForTimeout(600);
+  await page.keyboard.up("KeyA");
+  await expect
+    .poll(async () => (await diagnostics(page)).predicted!.grounded)
+    .toBe(true);
+  await page.keyboard.down("Space");
+  await page.keyboard.down("ShiftLeft");
+  let rising: Awaited<ReturnType<typeof diagnostics>> | undefined;
+  await expect
+    .poll(
+      async () => {
+        const data = await diagnostics(page);
+        if ((data.predicted?.y ?? 0) > 8) rising = data;
+        return data.predicted?.y ?? 0;
+      },
+      { timeout: 4_000 },
+    )
+    .toBeGreaterThan(8);
+  const centerY = (rising!.camera.bottom + rising!.camera.top) / 2;
+  expect(centerY).toBeGreaterThan(6.75);
+  expect(rising!.camera.top - rising!.camera.bottom).toBeCloseTo(13.5, 5);
+  expect(
+    Math.abs(centerY - Math.min(20.25, rising!.predicted!.y)),
+  ).toBeLessThan(0.4);
+  await page.keyboard.up("Space");
+  await page.keyboard.up("ShiftLeft");
+
+  await page.locator("#disconnect").click();
+  await expect
+    .poll(async () => (await diagnostics(page)).camera)
+    .toEqual(cameraBounds());
+  await other.close();
 });

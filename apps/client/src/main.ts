@@ -26,7 +26,13 @@ import {
   confirmedLocalProtectionUntil,
 } from "./prediction";
 import { predictionLead, SchedulingJitter, ServerClock } from "./timing";
-import { Controls, PointerAim, type WorldPoint } from "./input";
+import { cameraBounds, type CameraBounds } from "./camera";
+import {
+  Controls,
+  PointerAim,
+  samplePredictedAim,
+  type WorldPoint,
+} from "./input";
 import { DelayQueue, PRESETS, type Preset } from "./network";
 import { View } from "./view";
 import { CombatPresentation } from "./combat";
@@ -104,6 +110,14 @@ function start() {
   let controlAt = -Infinity;
   let currentPointerTarget: WorldPoint | undefined,
     reticleVisible = false;
+  let viewBounds: CameraBounds = cameraBounds();
+  function renderedLocal() {
+    if (!prediction.state) return;
+    return {
+      x: prediction.state.x + prediction.offset.x,
+      y: prediction.state.y + prediction.offset.y,
+    };
+  }
   let confirmedHealth:
     { lifeId: number; tick: number; health: number } | undefined;
   let confirmedShieldBreak: { lifeId: number; eventId: number } | undefined;
@@ -697,6 +711,7 @@ function start() {
       },
       predicted: prediction.state,
       authoritative: prediction.authoritative,
+      camera: viewBounds,
       players: latest?.players ?? [],
       renderer: view.counts(),
       resources: {
@@ -776,9 +791,6 @@ function start() {
       now - lastPing > 1000
     )
       ping();
-    const pointerTarget: WorldPoint | undefined =
-      active && !syncing ? pointer.target(view.renderer.domElement) : undefined;
-    currentPointerTarget = pointerTarget;
     if (active && !syncing && prediction.state?.health) {
       if (now - lastSnapshotAt > 1000) resync("snapshots stale");
       else {
@@ -787,7 +799,12 @@ function start() {
         else
           try {
             for (let i = 0; i < 5 && prediction.tick < target; i++) {
-              const aim = pointer.sample(prediction.state!, pointerTarget);
+              const aim = samplePredictedAim(
+                pointer,
+                view.renderer.domElement,
+                renderedLocal(),
+                prediction.state!,
+              );
               combat.stepPrediction();
               const result = prediction.advanceWithActions(
                 controls.sample(aim.aimQ),
@@ -837,9 +854,20 @@ function start() {
         ? `Jet fuel · ${prediction.state.jetFuelTicksRemaining} / ${JETS.fuelTicks}`
         : "Jets off";
     prediction.smooth(Math.min(elapsed, 100));
-    const displayedAim = prediction.state
-      ? pointer.sample(prediction.state, pointerTarget)
-      : { aimQ: 0, reticleVisible: false };
+    viewBounds = cameraBounds(renderedLocal());
+    const reticleTarget: WorldPoint | undefined =
+      active && !syncing
+        ? pointer.target(view.renderer.domElement, viewBounds)
+        : undefined;
+    currentPointerTarget = reticleTarget;
+    const rendered = renderedLocal();
+    const displayedAim =
+      prediction.state && rendered
+        ? pointer.sample(
+            { ...prediction.state, x: rendered.x, y: rendered.y },
+            reticleTarget,
+          )
+        : { aimQ: 0, reticleVisible: false };
     reticleVisible =
       active &&
       !syncing &&
@@ -867,7 +895,8 @@ function start() {
       playerId,
       prediction.authoritative,
       element<HTMLInputElement>("debug").checked,
-      pointerTarget,
+      viewBounds,
+      reticleTarget,
       reticleVisible,
       combatView.projectiles,
       combatView.effects,
