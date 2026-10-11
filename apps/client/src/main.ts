@@ -906,7 +906,7 @@ function start() {
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
-  // Test hooks exist only on explicitly requested local test pages; they cannot alter server state.
+  // Opt-in diagnostic hooks cannot alter server state; remote smoke also uses them.
   if (new URLSearchParams(location.search).has("test"))
     Object.assign(window, {
       __derp: {

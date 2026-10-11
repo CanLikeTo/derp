@@ -2,6 +2,8 @@
 
 Status: **pending human playtest**. Test directly on the computer with two connected windows, first at 0 ms added latency, then 100 and 200 ms. The earlier aim and carbine human playtests remain pending.
 
+For two humans on independent desktop networks, first complete the protected [VPS deployment and smoke](DEPLOYMENT.md). Each opens the HTTPS URL, enters the shared Basic credentials, clicks Connect and activates their own arena; testers do not need Tailscale. Record measured WAN RTT, browser/device/build and synthetic preset separately: **0 ms added latency is not zero WAN delay**. Include jets/focus/reconnect/reset and a deliberate service restart, then export diagnostics. Playwright WebKit does not certify actual Safari.
+
 1. Shoot the unprotected opponent four times. Both windows should agree on the 100 → 75 → 50 → 25 → 0 health sequence, one death, and a two-second countdown.
 2. Keep firing through death. The dead player should stay still, stop taking hits, and not shoot on respawn until the mouse button has been released and pressed again.
 3. After respawn, verify the player appears at the farther valid spawn with full health and one second of protection. A blocked hit should be visibly different; firing should end protection.

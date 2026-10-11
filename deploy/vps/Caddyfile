@@ -1,0 +1,19 @@
+__DERP_HOSTNAME__ {
+	encode gzip
+	header X-Content-Type-Options nosniff
+	route {
+		import /etc/caddy/derp-users.caddy
+		@backend path /ws /health
+		handle @backend {
+			reverse_proxy 127.0.0.1:3001 {
+				header_up Host 127.0.0.1:3001
+				header_up -Authorization
+			}
+		}
+		handle {
+			root * /srv/derp/current/client
+			header Cache-Control "no-cache"
+			file_server
+		}
+	}
+}

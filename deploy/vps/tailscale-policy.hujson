@@ -1,0 +1,36 @@
+// Merge into the existing policy in https://console.tailscale.com/admin/acls.
+// Replace both example identities. Human operator clients must remain user-owned.
+// Grants, legacy ACLs and SSH rules are additive: narrow overlapping broad allows.
+// Negative tests are assertions, not overriding deny rules. Save only if all pass.
+{
+  "groups": { "group:derp-operators": ["operator@example.com"] },
+  "tagOwners": { "tag:derp-vps": ["group:derp-operators"] },
+  "grants": [
+    { "src": ["group:derp-operators"], "dst": ["tag:derp-vps"], "ip": ["tcp:22"] }
+  ],
+  "ssh": [
+    {
+      "action": "check",
+      "src": ["group:derp-operators"],
+      "dst": ["tag:derp-vps"],
+      "users": ["derp-admin"]
+    }
+  ],
+  "tests": [
+    { "src": "operator@example.com", "proto": "tcp", "accept": ["tag:derp-vps:22"] },
+    { "src": "unrelated@example.com", "proto": "tcp", "deny": ["tag:derp-vps:22"] }
+  ],
+  "sshTests": [
+    {
+      "src": "operator@example.com",
+      "dst": ["tag:derp-vps"],
+      "check": ["derp-admin"],
+      "deny": ["root", "derp"]
+    },
+    {
+      "src": "unrelated@example.com",
+      "dst": ["tag:derp-vps"],
+      "deny": ["derp-admin", "root", "derp"]
+    }
+  ]
+}

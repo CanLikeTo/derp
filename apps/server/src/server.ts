@@ -77,7 +77,41 @@ type SocketData = {
   lastControl: number;
   outbox: Outbox;
 };
-export async function startServer(port = 3001) {
+export interface ServerOptions {
+  port?: number;
+  publicOrigin?: string;
+}
+export interface RunningServer {
+  server: Bun.Server<SocketData>;
+  room: Room;
+  stats: () => ServerStats;
+  stop(): void;
+}
+export async function startServer({
+  port = 3001,
+  publicOrigin,
+}: ServerOptions = {}): Promise<RunningServer> {
+  if (publicOrigin !== undefined) {
+    let valid = false;
+    try {
+      const parsed = new URL(publicOrigin);
+      valid =
+        parsed.protocol === "https:" &&
+        parsed.hostname !== "" &&
+        !/[*,]/.test(parsed.hostname) &&
+        parsed.username === "" &&
+        parsed.password === "" &&
+        parsed.origin === publicOrigin;
+    } catch {
+      throw new Error("DERP_PUBLIC_ORIGIN must be a canonical HTTPS origin");
+    }
+    if (!valid)
+      throw new Error("DERP_PUBLIC_ORIGIN must be a canonical HTTPS origin");
+  }
+  const allowedOrigins =
+    publicOrigin === undefined
+      ? ["http://127.0.0.1:5173", "http://127.0.0.1:4173"]
+      : [publicOrigin];
   await initializePhysics();
   const room = new Room();
   const sockets = new Set<ServerWebSocket<SocketData>>();
@@ -173,11 +207,7 @@ export async function startServer(port = 3001) {
         });
       if (url.pathname !== "/ws" || request.method !== "GET")
         return new Response("Not found", { status: 404 });
-      if (
-        !["http://127.0.0.1:5173", "http://127.0.0.1:4173"].includes(
-          request.headers.get("origin") ?? "",
-        )
-      )
+      if (!allowedOrigins.includes(request.headers.get("origin") ?? ""))
         return new Response("Invalid origin", { status: 403 });
       if (sockets.size >= 8)
         return new Response("Connection limit", { status: 503 });

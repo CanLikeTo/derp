@@ -15,7 +15,7 @@ Open **http://127.0.0.1:5173** in two windows. Click **Connect** in each, then c
 
 `Disconnect` releases a seat. `Reconnect` creates a fresh anonymous identity. `Reset playground` resets both players through the server. Selecting a latency preset requests a new timing baseline. The debug ghost is an older authoritative pose, not an error measurement.
 
-Stop with Ctrl+C; the supervisor stops both Bun and Vite. All listeners bind to `127.0.0.1`, and occupied ports fail instead of being changed silently. Do not add tunnels, port forwarding, public binds, or expose this unauthenticated development build online.
+Stop with Ctrl+C; the supervisor stops both Bun and Vite. All listeners bind to `127.0.0.1`, and occupied ports fail instead of being changed silently. Do not add tunnels, port forwarding, public binds, or expose this unauthenticated development build online. For invited remote testers, use the separate [Debian VPS deployment](docs/DEPLOYMENT.md): built assets behind HTTPS/Basic auth, with administration exclusively through native Tailscale SSH.
 
 Vite reloads browser changes. Restart `bun run dev` after changing server/shared simulation code, then reconnect the windows. The server intentionally does not use Bun watch mode: a startup failure must exit and clean up the other process.
 
@@ -27,6 +27,7 @@ Vite reloads browser changes. Restart `bun run dev` after changing server/shared
 | `bun run check` | Strict TypeScript, package boundaries, unit and loopback integration tests |
 | `bun run build` | Browser assets and a bundled Bun server in `dist/` |
 | `bun run preview` | Built server on 3001 + browser preview on 4173 |
+| `bun tools/vps-smoke.ts` | Protected remote HTTPS/WSS proof; requires deployment URL and Basic credentials |
 | `bun run compat` | Bun Rapier restoration/replay fixture |
 | `bun run test:e2e` | Built-preview workflows in Chromium, Firefox, and WebKit |
 | `DERP_MODE=dev bun run test:e2e` | The same workflows against Vite development |
@@ -80,7 +81,7 @@ The Rapier compatibility build embeds WASM and produces a bundle-size advisory (
 - Shared simulation: canonical room, kinematic movement, state restoration and replay; no DOM/network/server imports.
 - Shared protocol: versions, runtime message validators, limits and measurement helpers.
 
-No scoring, ammo, reloads, weapon switching, auth, lobbies, database, external art/audio, or hosting is included. This duel remains an authority lab, not a complete match system. The Colyseus comparison, full Rapier terrain sweep, and auth/provider/database compatibility investigation remain deferred.
+No scoring, ammo, reloads, weapon switching, account authentication, lobbies, database, or external art/audio is included. Private VPS deployment tooling adds a shared Basic-auth perimeter, not player identity or production hosting. This duel remains an authority lab, not a complete match system. The Colyseus comparison, full Rapier terrain sweep, and auth/provider/database compatibility investigation remain deferred.
 
 A Git repository and remote are configured. The CI workflow is provided; remote CI for this change has not been run or verified.
 
