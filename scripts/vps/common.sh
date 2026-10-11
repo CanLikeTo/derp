@@ -4,6 +4,27 @@ set -euo pipefail
 
 fail() { printf 'dERP: %s\n' "$*" >&2; exit 1; }
 require_root() { [[ $EUID == 0 ]] || fail 'Run as root (sudo for administration).'; }
+require_console() {
+  [[ -z ${SSH_CONNECTION:-} && -z ${SSH_CLIENT:-} && -z ${SSH_TTY:-} ]] || fail 'Provision/package maintenance requires the provider console, not SSH.'
+  # sudo clears SSH_*; the kernel's ancestry still includes the SSH daemon.
+  local pid=$BASHPID comm key parent
+  while :; do
+    if ! IFS= read -r comm < "/proc/$pid/comm" || [[ -z $comm ]]; then
+      fail 'Cannot verify the provider console: unreadable process ancestry.'
+    fi
+    case "$comm" in
+      sshd|sshd-session|tailscaled) fail 'Provision/package maintenance requires the provider console, not SSH.';;
+    esac
+    [[ $pid != 1 ]] || return 0
+    parent=''
+    while read -r key parent _; do
+      if [[ $key == PPid: ]]; then break; fi
+      parent=''
+    done < "/proc/$pid/status" || fail 'Cannot verify the provider console: unreadable process ancestry.'
+    [[ $parent =~ ^[1-9][0-9]*$ && $parent != "$pid" ]] || fail 'Cannot verify the provider console: incomplete process ancestry.'
+    pid=$parent
+  done
+}
 lock_host() {
   install -d -m 0755 /run/lock
   exec 9>/run/lock/derp-vps.lock

@@ -24,7 +24,7 @@ IFS=. read -r -a labels <<< "$hostname"
 for label in "${labels[@]}"; do valid_label "$label" || fail 'Invalid public DNS label.'; done
 valid_label "$tailname" || fail 'Invalid single-label Tailscale hostname.'
 require_root
-[[ -z ${SSH_CONNECTION:-} && -z ${SSH_CLIENT:-} ]] || fail 'Provision/package maintenance requires the provider console, not SSH.'
+require_console
 source /etc/os-release
 [[ $ID == debian && $VERSION_ID == 13 ]] || fail 'Only Debian 13 is supported.'
 [[ -d /run/systemd/system ]] || fail 'A running systemd host is required.'
