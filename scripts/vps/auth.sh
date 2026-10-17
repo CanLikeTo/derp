@@ -15,7 +15,7 @@ valid_basic_auth_file() {
 
 # Source this function under provision.sh's existing lock; standalone takes its own.
 set_basic_auth() {
-  local work hash had_previous=false
+  local work hash had_previous=false restart_attempted=false
   [[ $EUID == 0 && -t 0 && -r /dev/tty && -w /dev/tty ]] || { printf 'dERP: root and a controlling TTY are required for hidden password entry.\n' >&2; return 1; }
   [[ -d /etc/caddy && -f /etc/caddy/Caddyfile && ! -L /etc/caddy/derp-users.caddy ]] || { printf 'dERP: expected managed Caddy configuration.\n' >&2; return 1; }
   printf 'Use a password-manager-generated tester password (at least 20 characters).\n' >&2
@@ -34,15 +34,28 @@ set_basic_auth() {
   unset hash
   if ! valid_basic_auth_file "$work/users"; then rm -rf -- "$work"; return 1; fi
   if ! chown root:caddy "$work/users" || ! chmod 0640 "$work/users" || ! mv -T "$work/users" /etc/caddy/derp-users.caddy; then rm -rf -- "$work"; return 1; fi
-  if ! caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile ||
-     { systemctl is-active --quiet caddy.service && ! systemctl reload caddy.service; }; then
-    if [[ $had_previous == true ]]; then
-      mv -T "$work/previous" /etc/caddy/derp-users.caddy
-    else
-      rm -f /etc/caddy/derp-users.caddy
+  if ! validate_caddy_config /etc/caddy/Caddyfile ||
+     { systemctl is-active --quiet caddy.service && { restart_attempted=true; ! systemctl restart caddy.service; }; }; then
+    if ! {
+      if [[ $had_previous == true ]]; then
+        mv -T "$work/previous" /etc/caddy/derp-users.caddy
+      else
+        rm -f /etc/caddy/derp-users.caddy
+      fi
+    }; then
+      if ! systemctl stop caddy.service; then printf 'dERP: could not stop Caddy; immediate console recovery required.\n' >&2; fi
+      printf 'dERP: users-file restoration failed; private recovery files retained at %s.\n' "$work" >&2
+      return 1
+    fi
+    if ! validate_caddy_config /etc/caddy/Caddyfile ||
+       { [[ $restart_attempted == true ]] && ! systemctl restart caddy.service; }; then
+      if ! systemctl stop caddy.service; then printf 'dERP: could not stop Caddy; immediate console recovery required.\n' >&2; fi
+      rm -rf -- "$work"
+      printf 'dERP: previous users file restored but Caddy recovery failed; stop requested, inspect from console.\n' >&2
+      return 1
     fi
     rm -rf -- "$work"
-    printf 'dERP: authentication activation failed; previous users file restored.\n' >&2
+    printf 'dERP: authentication activation failed; previous users file restored and any attempted restart recovered.\n' >&2
     return 1
   fi
   rm -rf -- "$work"
@@ -57,5 +70,6 @@ if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
   require_root
   lock_host
   require_managed
+  require_bun
   set_basic_auth
 fi

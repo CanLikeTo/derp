@@ -58,7 +58,9 @@ Client and server queues have explicit caps. Server output retains only the late
 
 ## Private remote-test perimeter
 
-[DEPLOYMENT.md](DEPLOYMENT.md) defines the Debian 13 console-bootstrap scripts, native Tailscale SSH policy, shared HTTPS Basic-auth proxy, sandboxed Bun service and reversible artifact releases. Caddy authenticates assets, health and WebSockets before routing, strips upstream Authorization and preserves the browser Origin. Basic auth is not protocol/player identity. Only tailnet-authorized `derp-admin` receives SSH/sudo access; ordinary SSH is persistently masked, with provider-console recovery. Tailscale is not a dependency of public browser play. Restart/rollback discards the anonymous in-memory room. Scripts/templates do not establish live VPS, tailnet, DNS or manual-browser proof.
+[DEPLOYMENT.md](DEPLOYMENT.md) defines the Debian 13 console-bootstrap scripts, native Tailscale SSH policy, shared HTTPS Basic-auth proxy, sandboxed Bun service and reversible artifact releases. Caddy authenticates assets, health and WebSockets before routing, strips upstream Authorization and preserves the browser Origin. Basic auth is not protocol/player identity. Only tailnet-authorized `derp-admin` receives SSH/sudo access; ordinary SSH is persistently masked, with provider-console recovery. Tailscale is not a dependency of public browser play. Bun restart/rollback discards the anonymous in-memory room. Scripts/templates do not establish live VPS, tailnet, DNS or manual-browser proof.
+
+Caddy's admin API is disabled, not merely restricted to loopback: the Bun service must reach loopback but must not read the proxy's bcrypt hash or replace its authentication configuration. Validated proxy changes therefore restart Caddy rather than using its admin-dependent reload API. Recovery restores and validates the previous file before restarting; an admin-enabled backup is never reactivated.
 
 
 ## Validation interpretation

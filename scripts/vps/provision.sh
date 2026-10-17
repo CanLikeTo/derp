@@ -122,16 +122,20 @@ if ! valid_basic_auth_file /etc/caddy/derp-users.caddy ||
   cp -a "$work/Caddyfile.old" /etc/caddy/Caddyfile
   fail 'Unsafe/empty managed authentication file; Caddy remains masked.'
 fi
-if ! caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile; then
-  cp -a "$work/Caddyfile.old" /etc/caddy/Caddyfile
-  fail 'Caddy validation failed; previous configuration restored.'
-fi
-systemctl unmask caddy.service
-systemctl daemon-reload
-if systemctl is-active --quiet caddy.service; then
-  if ! systemctl reload caddy.service; then cp -a "$work/Caddyfile.old" /etc/caddy/Caddyfile; systemctl mask --now caddy.service; fail 'Caddy reload failed; previous configuration restored and Caddy masked.'; fi
-else
-  if ! systemctl enable --now caddy.service; then cp -a "$work/Caddyfile.old" /etc/caddy/Caddyfile; systemctl mask --now caddy.service; fail 'Caddy activation failed; previous configuration restored and Caddy masked.'; fi
+if ! validate_caddy_config /etc/caddy/Caddyfile ||
+   ! systemctl unmask caddy.service ||
+   ! systemctl daemon-reload ||
+   ! systemctl restart caddy.service ||
+   ! systemctl enable caddy.service; then
+  if cp -a "$work/Caddyfile.old" /etc/caddy/Caddyfile &&
+     validate_caddy_config /etc/caddy/Caddyfile &&
+     systemctl unmask caddy.service &&
+     systemctl daemon-reload &&
+     systemctl restart caddy.service; then
+    fail 'Caddy activation failed; previous secure configuration restored and restarted.'
+  fi
+  systemctl mask --now caddy.service
+  fail 'Caddy activation/recovery failed or previous configuration was unsafe; Caddy masked.'
 fi
 install -o root -g root -m 0644 "$ROOT/deploy/vps/derp.service" /etc/systemd/system/derp.service
 systemctl daemon-reload

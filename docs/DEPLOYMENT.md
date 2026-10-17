@@ -59,7 +59,7 @@ The provisioner masks ordinary SSH **before** installing packages. It installs D
 
 Before changing host state, provisioning rejects SSH environment indicators and walks the Linux `/proc` ancestor chain through `sudo` to PID 1. Any `sshd`, `sshd-session` or `tailscaled` ancestor is refused even when sudo clears `SSH_*`. Unreadable/incomplete ancestry also fails closed. `SUDO_USER` alone is not a remote-session signal: legitimate provider-console sudo remains allowed. Do not use a detached launcher to bypass this safety check.
 
-Provisioning also stops/masks Caddy during console package maintenance, preventing Debian's unauthenticated default site from starting. It unmasks Caddy only after validating the exact managed tester/bcrypt block and the full config; activation failure leaves it masked. An empty import is valid Caddy syntax but must never count as authentication. Identical provisioning reruns can interrupt HTTPS while reconciling packages/configuration.
+Provisioning also stops/masks Caddy during console package maintenance, preventing Debian's unauthenticated default site from starting. It unmasks Caddy only after validating the exact managed tester/bcrypt block and the full config with the admin API disabled. Failed validation/activation restores the previous Caddyfile and restarts it only if that restored config also validates with `admin off`; unsafe legacy/default backups or failed recovery leave Caddy masked. An empty import is valid Caddy syntax but must never count as authentication. Identical provisioning reruns can interrupt HTTPS while reconciling packages/configuration.
 
 The initial command runs:
 
@@ -71,6 +71,8 @@ tailscale up --ssh --advertise-tags=tag:derp-vps \
 Follow its browser authorization URL as an authorized tag owner and approve the node when required. Timeout/failed approval leaves ordinary SSH blocked. Verify `tag:derp-vps` and actual key-expiry state in the admin console. Leave netfilter mode `on`; no Serve/Funnel, auto-update, advertised routes, exit node, shields-up or persistent web client.
 
 At Caddy's hidden controlling-TTY prompt, enter the tester password. Only a validated bcrypt hash is stored, root:caddy mode 0640 in `/etc/caddy/derp-users.caddy`; the Caddyfile also has mode 0640. Debian's Caddy 2.6.2 uses **`basicauth`**, not the newer `basic_auth` spelling. Full config validation precedes activation; auth executes before both proxy/static handlers. Caddy strips Authorization upstream, sets Bun's exact loopback Host, and preserves Origin. No public health exception, SPA fallback, directory listing or unauthenticated game route exists.
+
+The global `admin off` disables Caddy's unauthenticated localhost:2019 API, including access from the `derp` service user. UFW and off-host port probes do not protect loopback. Validation privately consumes `caddy adapt --validate` JSON with pinned Bun and requires `admin.disabled=true`, including during rollback. Debian's API-based `caddy reload`/`systemctl reload caddy` is therefore not used: configuration and credential changes use validated `systemctl restart caddy`, disconnecting existing proxy connections. To upgrade an existing setup, reapply the updated setup bundle and rerun provisioning through the provider console; updating a checkout or rotating credentials alone does not install the new Caddyfile.
 
 Bun remains stopped/disabled until a successful first release. Caddy certificate storage and `/var/lib/tailscale` identity are persistent package state; never archive them with releases or expose them through the web root.
 
@@ -135,7 +137,7 @@ tailscale ssh "$ADMIN" \
 
 Release IDs are 1–64 alphanumeric/underscore/hyphen characters, starting alphanumeric. Existing IDs cannot be overwritten. The deployer requires `client/index.html` and `server/main.js`, rejects symlinks/special files throughout the upload, copies only client/server, normalizes root ownership and 0755/0644 modes, and atomically publishes the release. No source, node_modules or Vite service. The sandboxed Bun service binds only `127.0.0.1:3001`; its public origin must be canonical HTTPS. A configured origin replaces, rather than extends, the two local frontend origins. Host checks remain exact loopback authority.
 
-Activation atomically changes `/srv/derp/current`, restarts Bun and polls health/readiness with bounded requests for 30 seconds. First success enables boot start; previous is recorded only on success. Failed startup/readiness restores/rechecks the old release and exits nonzero even after recovery. A failed first deployment removes current and stops the unit. Failed releases/logs remain; no automatic pruning or Caddy reload just for deployment.
+Activation atomically changes `/srv/derp/current`, restarts Bun and polls health/readiness with bounded requests for 30 seconds. First success enables boot start; previous is recorded only on success. Failed startup/readiness restores/rechecks the old release and exits nonzero even after recovery. A failed first deployment removes current and stops the unit. Failed releases/logs remain; no automatic pruning or Caddy restart just for artifact deployment.
 
 ```sh
 tailscale ssh "$ADMIN" 'sudo readlink /srv/derp/current; sudo readlink /srv/derp/previous'
@@ -144,11 +146,21 @@ tailscale ssh "$ADMIN" \
 tailscale ssh "$ADMIN" 'sudo journalctl -u derp -u caddy -u tailscaled --no-pager -n 100'
 ```
 
-Every restart/rollback disconnects players and destroys the single in-memory room. Refresh/reconnect creates fresh anonymous identities; this is not seamless match recovery. Caddy and Bun do not depend on tailscaled for browser play.
+Every Bun release restart/rollback disconnects players and destroys the single in-memory room. Refresh/reconnect creates fresh anonymous identities; this is not seamless match recovery. Caddy and Bun do not depend on tailscaled for browser play.
 
 ## 5. Verify protected HTTPS and real browser WSS
 
 From an independent non-tailnet network, check each public IPv4/IPv6 address with `nc -vz -w 3 <address> <port>` for **22, 3001, 4173, 5173, 2019 and any former image SSH port**. All must fail while approved native SSH and HTTPS simultaneously work. Only TCP 80/443 are intended ingress. Never use `curl -k` or disable browser TLS verification.
+
+In the approved admin shell **on the VPS**, also probe loopback as the application user:
+
+```sh
+sudo -u derp timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/2019'
+sudo -u derp timeout 3 bash -c 'exec 3<>/dev/tcp/::1/2019'
+sudo ss -ltnp
+```
+
+Both probes must fail immediately with **Connection refused**; a timeout or another error is not valid proof. There must be no Caddy admin listener, on port 2019 or another address. Repeat after provisioning, credential rotation, rollback and reboot while protected HTTPS still works. No admin response should be fetched or logged: it can contain the bcrypt hash.
 
 Run the browser smoke off-host from a checkout with the pinned Bun version and frozen dependencies. Install Playwright's Chromium, Firefox and WebKit plus their system runtime libraries on a supported smoke workstation (`bun x playwright install --with-deps`). Those browser packages do not belong on the VPS.
 
@@ -180,7 +192,7 @@ tailscale ssh "$ADMIN"
 sudo bash /root/derp-setup/scripts/vps/auth.sh
 ```
 
-The sourceable auth function shares provisioning's lock; standalone rotation acquires the same `/run/lock/derp-vps.lock`. It validates the full Caddy configuration, reloads only when active, and restores the prior users file on failure. Reprovisioning never rotates the hash. Old credentials must fail in a **fresh** request/browser context; cached responses/open WebSockets are not a revocation check. Rotation/reload may disconnect sockets.
+The sourceable auth function shares provisioning's lock; standalone rotation acquires the same `/run/lock/derp-vps.lock` and verifies pinned Bun. It validates the full Caddy configuration with `admin off`, then restarts only when active; stopped bootstrap stays stopped. Failure restores the prior users file, validates the restored config and, if a restart was attempted, restarts it again so the restored credentials actually serve. Failed recovery requests a stop and reports console recovery; failed file restoration retains private recovery files instead of discarding the backup. Reprovisioning never rotates the hash. Old credentials must fail in a **fresh** request/browser context; cached responses/open WebSockets are not a revocation check. Rotation/restart disconnects sockets.
 
 ## 6. Recovery, reboot and manual playtest gates
 
@@ -192,6 +204,7 @@ On disposable snapshots only:
 4. **From the provider console**, stop tailscaled. Native SSH must become unavailable while public HTTPS/Basic auth/Bun remain functional and public SSH remains blocked. Restart from console, repeat positive/negative logins without reenrollment. Never stop/down/logout from the sole remote session.
 5. With healthy control plane, another retained operator and console recovery, remove a disposable operator from `group:derp-operators` during their active SSH session. Save policy: session must terminate and new login fail; retained operator still works. Restore intended membership. This proves identity revocation, not just transport; it does not promise revocation/new check-mode login during control-plane outage.
 6. Two humans on independent desktop networks open HTTPS, enter Basic credentials, Connect and activate both arenas. Follow [PLAYTEST.md](PLAYTEST.md) for damage/death/respawn, jets, focus/blur/reconnect/reset and a deliberate service restart. Record browser/device/build, **measured WAN RTT**, synthetic preset, surprises and exported diagnostics. Zero added delay does not mean zero network delay. Playwright WebKit is not actual Safari; manually verify supported Safari as well as Chrome/Firefox.
+7. From the console, induce Caddy validation/restart failure during provisioning and credential rotation. The command must fail even when the previous secure configuration/credentials recover and serve protected HTTPS. Failed recovery must leave the proxy stopped/masked; an admin-enabled legacy/default backup must never be started. Repeat the application-user loopback probes. These are actual Debian unit/recovery gates, not satisfied by a process-controller smoke.
 
 Tailscale package upgrades/restarts and provisioning reruns belong in the **provider console**, since upgrades can restart the only SSH path. Preserve `/var/lib/tailscale`. For deliberate expiry/revocation recovery, check networking/DNS/time, repair the signed package/service and, only when intentionally reauthenticating, run from the console:
 
@@ -214,6 +227,7 @@ Recorded local implementation checks:
 - Caddy 2.6.2 loopback checks proved protected HTML/assets/health/WS, rejected wrong credentials and hostile/missing WS origins, and carried an authenticated WebSocket baseline. Temporary-CA HTTPS checks exercised the remote smoke's eight missing/wrong-credential challenges without disabling TLS verification. The full remote smoke was **not** completed: this workstation cannot bind HTTP port 80 and no authorized public target was supplied.
 - Local browser checks passed **40 Chromium/Firefox cases and 19 WebKit cases**. WebKit required temporary, process-scoped runtime libraries here. Its carbine test timed out at `tests/e2e/playground.spec.ts:399` waiting for observer player impacts; the same failure reproduced against committed HEAD in an isolated build. Gameplay and that assertion were not changed. A real built-client browser session also admitted, rendered and advanced authoritative movement.
 - Console-guard review checks used real Linux process names from Bash symlinks, not SSH daemons or a mocked `/proc`: with SSH variables removed and a retained sudo-like intermediary, all three remote daemon names were refused while an agetty-style chain with `SUDO_USER` present was allowed. Empty process names and direct SSH indicators were refused. These checks did not execute sudo, package maintenance or host-service mutations.
+- Caddy admin/restart review verification passed **10 scenarios** in private user/mount/network namespaces using real Caddy 2.6.2, the unchanged interactive `auth.sh` and the provisioning activation block. Both loopback families returned `ECONNREFUSED` on 2019. Real HTTP responses proved credential rotation, restored credentials and restored Caddyfile headers; port-collision restart failures exercised successful recovery, stopped/masked recovery failure, unsafe-backup refusal and normal activation. A test process controller substituted for systemd; this is not proof of Debian's unit, the full provisioner or real `derp` account permissions.
 - Bash syntax, Shellcheck and local CLI/auth-config boundary smokes passed. These are not proof of actual Debian provisioning, SSH authorization, firewall enforcement, systemd sandboxing, release rollback, reboot, outage recovery or identity revocation; those remain live-host gates above.
 
 Primary operational references: [Debian Caddy](https://packages.debian.org/trixie/caddy), [Caddy Basic auth](https://caddyserver.com/docs/caddyfile/directives/basic_auth), [native Tailscale SSH](https://tailscale.com/docs/features/tailscale-ssh), [CLI settings](https://tailscale.com/docs/reference/tailscale-cli), [policy/tests](https://tailscale.com/docs/reference/syntax/policy-file), [signed stable repository](https://pkgs.tailscale.com/stable/), [UFW integration](https://tailscale.com/docs/how-to/secure-ubuntu-server-with-ufw), [netfilter modes](https://tailscale.com/docs/reference/netfilter-modes).

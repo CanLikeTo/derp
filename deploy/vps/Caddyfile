@@ -1,3 +1,7 @@
+{
+	admin off
+}
+
 __DERP_HOSTNAME__ {
 	encode gzip
 	header X-Content-Type-Options nosniff

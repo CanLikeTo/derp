@@ -85,3 +85,14 @@ require_bun() {
   [[ -f /usr/local/bin/bun && ! -L /usr/local/bin/bun && $(stat -c '%u' /usr/local/bin/bun) == 0 ]] || fail 'Expected root-owned pinned Bun.'
   [[ $(/usr/local/bin/bun --version) == "$DERP_BUN_VERSION" ]] || fail 'Installed Bun differs from the managed pin.'
 }
+validate_caddy_config() {
+  # Consume adapted JSON privately; never print the embedded bcrypt hash.
+  if ! caddy adapt --config "$1" --adapter caddyfile --validate |
+       /usr/local/bin/bun -e '
+         const config=await new Response(Bun.stdin.stream()).json();
+         if(config?.admin?.disabled!==true) process.exit(1);
+       '; then
+    printf 'dERP: Caddy configuration must validate with admin off.\n' >&2
+    return 1
+  fi
+}
