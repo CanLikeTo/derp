@@ -6,7 +6,7 @@ The two-player duel adds server-owned 100 health, 25 carbine damage, a 120-tick 
 
 Input frames now carry a life ID in addition to the existing epoch. Death and respawn rotate only the affected player's epoch; resets and jet-mode changes retain their room-generation reset semantics. Event batches may be split after 16 records, and all records for the tick precede any lifecycle baseline or snapshot. Local health is confirmed rather than predicted; remote lifecycle and projectile presentation share the historical timeline. Releasing and pressing fire after respawn prevents a held trigger from canceling protection immediately.
 
-The duel remains local and anonymous. Scoring, rounds, ammo, reloads, rockets, explosions, account identity and hosting remain later work. The human aim/carbine/duel playtests are pending.
+The duel remains anonymous and local by default; private remote testing now uses the deployment perimeter described below. Scoring, rounds, ammo, reloads, rockets, explosions and account identity remain later work. The human aim/carbine/duel playtests are pending.
 
 ## Authoritative automatic-carbine lab
 
@@ -22,7 +22,7 @@ The canvas's live CSS rectangle maps the pointer through the player-following ca
 
 ## Scope and dependencies
 
-The approved slice is two anonymous players on one local machine, with solid rectangles and immediate run/jump movement. Prediction/reconciliation/interpolation are included earlier than the original Milestone 0 proof. Advanced terrain, combat, audio, accounts and hosting stay out.
+The original approved slice was two anonymous players on one local machine, with solid rectangles and immediate run/jump movement. Prediction/reconciliation/interpolation were included earlier than the original Milestone 0 proof. Advanced terrain, combat, audio, accounts and hosting were outside that slice; the current private remote-test perimeter is described below, not a production auth milestone.
 
 Pinned dependencies: Bun 1.4.0, Rapier2D compatibility package 0.20.0, Three.js 0.185.1, Vite 8.2.2, TypeScript 7.0.2 and Playwright 1.62.1. One workspace lockfile records transitive dependencies. Native Bun WebSockets are provisional for this slice; no claim that a Colyseus comparison has been completed.
 
@@ -48,13 +48,20 @@ Reconciliation error compares state at the same tick. Visual smoothing never cha
 
 ## Local serving and admission
 
-Fixed loopback ports: Bun 3001, Vite dev 5173, Vite preview 4173. Vite proxies `/ws`, rewrites the Host to the known backend authority, and preserves the browser Origin. The backend accepts only the two exact frontend origins and its exact loopback Host. CORS and wildcard host acceptance remain disabled. The endpoint is not a substitute for authenticated online admission.
+Fixed loopback ports: Bun 3001, Vite dev 5173, Vite preview 4173. Vite proxies `/ws`, rewrites the Host to the known backend authority, and preserves the browser Origin. By default the backend accepts only the two exact frontend origins and its exact loopback Host. An explicit canonical HTTPS `DERP_PUBLIC_ORIGIN` replaces both local origins with one exact remote origin, without changing the loopback bind/Host check. Invalid configuration fails before physics/listener startup. CORS, forwarded-origin and wildcard host acceptance remain disabled.
 
 The launcher owns shutdown through signals. It gives Vite a pipe and sets CI mode for that child so an inherited stdin EOF cannot terminate noninteractive preview or soak runs. Server watch mode is deliberately excluded because it can survive an initial bind failure; startup must fail and clean up both processes. Soak readiness fetches have an explicit timeout and consume their response bodies.
 
 Connection-local identities are server-generated UUIDs. Two joined seats and at most eight pending/live sockets bound admission. There are no tickets, owner roles, durable users or reconnect grace. A third hello gets a readable rejection before closure. A new connection always gets a new identity.
 
 Client and server queues have explicit caps. Server output retains only the latest unsent snapshot; control messages cannot bypass congested transport indefinitely. A 120-message/second token bucket, 120-message burst, 2 KiB input limit, liveness checks and epoch checks protect the local harness against mistakes and basic malformed traffic.
+
+## Private remote-test perimeter
+
+[DEPLOYMENT.md](DEPLOYMENT.md) defines the Debian 13 console-bootstrap scripts, native Tailscale SSH policy, shared HTTPS Basic-auth proxy, sandboxed Bun service and reversible artifact releases. Caddy authenticates assets, health and WebSockets before routing, strips upstream Authorization and preserves the browser Origin. Basic auth is not protocol/player identity. Only tailnet-authorized `derp-admin` receives SSH/sudo access; ordinary SSH is persistently masked, with provider-console recovery. Tailscale is not a dependency of public browser play. Bun restart/rollback discards the anonymous in-memory room. Scripts/templates do not establish live VPS, tailnet, DNS or manual-browser proof.
+
+Caddy's admin API is disabled, not merely restricted to loopback: the Bun service must reach loopback but must not read the proxy's bcrypt hash or replace its authentication configuration. Validated proxy changes therefore restart Caddy rather than using its admin-dependent reload API. Recovery restores and validates the previous file before restarting; an admin-enabled backup is never reactivated.
+
 
 ## Validation interpretation
 

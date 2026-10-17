@@ -1,0 +1,33 @@
+[Unit]
+Description=dERP private remote playground
+After=network.target
+
+[Service]
+Type=simple
+User=derp
+Group=derp
+WorkingDirectory=/srv/derp/current
+EnvironmentFile=/etc/derp/server.env
+ExecStart=/usr/local/bin/bun /srv/derp/current/server/main.js
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

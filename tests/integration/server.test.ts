@@ -1,31 +1,37 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { startServer } from "../../apps/server/src/server";
+import { startServer, type RunningServer } from "../../apps/server/src/server";
 import {
   CONTENT_VERSION,
   PROTOCOL_VERSION,
   parseServer,
   type ServerMessage,
 } from "@derp/protocol";
-let running: Awaited<ReturnType<typeof startServer>>;
+let running: RunningServer;
 beforeAll(async () => {
-  running = await startServer(0);
+  running = await startServer({ port: 0 });
 });
 afterAll(() => running.stop());
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+interface ConnectedClient {
+  socket: WebSocket;
+  messages: ServerMessage[];
+}
 async function connect(
   hello: unknown = {
     type: "hello",
     protocol: PROTOCOL_VERSION,
     content: CONTENT_VERSION,
   },
-) {
+  server = running,
+  origin = "http://127.0.0.1:5173",
+): Promise<ConnectedClient> {
   // DOM's constructor typing hides Bun's documented custom-header overload.
   const Socket = WebSocket as unknown as new (
     url: string,
     options: Bun.WebSocketOptions,
   ) => WebSocket;
-  const socket = new Socket(`ws://127.0.0.1:${running.server.port}/ws`, {
-    headers: { Origin: "http://127.0.0.1:5173" },
+  const socket = new Socket(`ws://127.0.0.1:${server.server.port}/ws`, {
+    headers: { Origin: origin },
   });
   const messages: ServerMessage[] = [];
   socket.addEventListener("message", (event) =>
@@ -161,7 +167,7 @@ test("server restart closes old sockets and new admission gets fresh identity", 
   running.stop();
   await delay(50);
   expect(old.socket.readyState).toBe(WebSocket.CLOSED);
-  running = await startServer(port);
+  running = await startServer({ port });
   const fresh = await connect();
   const after = fresh.messages[0];
   if (after?.type !== "baseline") throw new Error("No new baseline");
@@ -478,10 +484,114 @@ test("jet mode is authoritative, no-op and obsolete requests do not reset, and c
     const port = running.server.port!;
     running.stop();
     await delay(50);
-    running = await startServer(port);
+    running = await startServer({ port });
     expect(running.room.rules.jetsEnabled).toBe(false);
   } finally {
     a.socket.close();
     b.socket.close();
+  }
+});
+
+test("isolated servers admit real baselines for local and configured HTTPS origins", async () => {
+  for (const origin of [
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:4173",
+    "https://playtest.example.com",
+  ]) {
+    const server = await startServer({
+      port: 0,
+      ...(origin.startsWith("https:") ? { publicOrigin: origin } : {}),
+    });
+    let client: ConnectedClient | undefined;
+    try {
+      client = await connect(undefined, server, origin);
+      expect(client.messages[0]).toMatchObject({ type: "baseline" });
+      expect(server.room.participants.size).toBe(1);
+      expect(server.server.hostname).toBe("127.0.0.1");
+    } finally {
+      client?.socket.close();
+      server.stop();
+    }
+  }
+});
+
+test("public origin replaces local admission and cannot be forged with proxy headers", async () => {
+  const publicOrigin = "https://playtest.example.com";
+  for (const configured of [undefined, publicOrigin]) {
+    const server = await startServer({
+      port: 0,
+      ...(configured === undefined ? {} : { publicOrigin: configured }),
+    });
+    try {
+      const url = `http://127.0.0.1:${server.server.port}/ws`;
+      const origins =
+        configured === undefined
+          ? [publicOrigin]
+          : [
+              undefined,
+              "null",
+              "http://127.0.0.1:5173",
+              "http://127.0.0.1:4173",
+              "https://playtest.example.com.evil.example",
+              "http://playtest.example.com",
+              "https://playtest.example.com:8443",
+            ];
+      for (const origin of origins) {
+        const response = await fetch(url, {
+          headers: {
+            ...(origin === undefined ? {} : { Origin: origin }),
+            Forwarded: `host=127.0.0.1:${server.server.port};proto=https`,
+            "X-Forwarded-Host": `127.0.0.1:${server.server.port}`,
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Origin": publicOrigin,
+          },
+        });
+        expect(response.status).toBe(403);
+        expect(await response.text()).toBe("Invalid origin");
+      }
+      const response = await fetch(url, {
+        headers: {
+          Host: "playtest.example.com",
+          Origin: configured ?? "http://127.0.0.1:5173",
+          "X-Forwarded-Host": `127.0.0.1:${server.server.port}`,
+        },
+      });
+      expect(response.status).toBe(403);
+      expect(await response.text()).toBe("Invalid host");
+    } finally {
+      server.stop();
+    }
+  }
+});
+
+test("invalid public origins fail before binding the requested port", async () => {
+  const sentinel = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => new Response("occupied"),
+  });
+  try {
+    for (const publicOrigin of [
+      "",
+      " https://playtest.example.com",
+      "https://playtest.example.com ",
+      "*",
+      "https://*.example.com",
+      "https://one.example,https://two.example",
+      "http://playtest.example.com",
+      "https://playtest.example.com/",
+      "https://playtest.example.com/path",
+      "https://playtest.example.com?query",
+      "https://playtest.example.com#hash",
+      "https://user:password@playtest.example.com",
+      "https://PLAYTEST.example.com",
+      "https://playtest.example.com:443",
+    ]) {
+      await expect(
+        startServer({ port: sentinel.port!, publicOrigin }),
+      ).rejects.toThrow("DERP_PUBLIC_ORIGIN must be a canonical HTTPS origin");
+    }
+  } finally {
+    sentinel.stop(true);
   }
 });
